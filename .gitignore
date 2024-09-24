@@ -78,3 +78,4 @@ perf-test.py
 # nvtx profile report
 *.nsys-rep
 *.sqlite
+example.*

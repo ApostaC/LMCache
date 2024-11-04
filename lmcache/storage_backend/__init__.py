@@ -3,8 +3,9 @@ from lmcache.logging import init_logger
 from lmcache.storage_backend.abstract_backend import LMCBackendInterface
 from lmcache.storage_backend.hybrid_backend import \
     LMCHybridBackend  # , LMCPipelinedHybridBackend
-from lmcache.storage_backend.local_backend import (LMCLocalBackend,
-                                                   LMCLocalDiskBackend)
+from lmcache.storage_backend.local_backend import LMCLocalBackend
+#from lmcache.storage_backend.local_backend import (LMCLocalBackend,
+#                                                   LMCLocalDiskBackend)
 from lmcache.storage_backend.remote_backend import LMCRemoteBackend
 
 logger = init_logger(__name__)
@@ -30,9 +31,13 @@ def CreateStorageBackend(
                         f" backend")
                     return LMCLocalBackend(config)
                 case _:
-                    logger.info(f"Initializing local-only (disk) backend at"
-                                f" {config.local_device}")
-                    return LMCLocalDiskBackend(config)
+                    #logger.info(f"Initializing local-only (disk) backend at"
+                    #            f" {config.local_device}")
+                    #return LMCLocalDiskBackend(config)
+                    logger.info(
+                        f"Initializing CPU backend (with disk support) at"
+                        f" {config.local_device}")
+                    return LMCLocalBackend(config)
 
         case LMCacheEngineConfig(
                 _, local_device=str(p),

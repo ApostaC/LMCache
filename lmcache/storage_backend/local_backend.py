@@ -41,7 +41,13 @@ class LMCLocalBackend(LMCBackendInterface):
         self.chunk_size = config.chunk_size
         self.config = config
         self.dict: OrderedDict[CacheEngineKey, torch.Tensor] = OrderedDict()
-        self.device = config.local_device
+        if config.local_device != "cpu" and config.local_device != "cuda":
+            self.device = "cpu"
+            self.path = config.local_device
+            self.has_disk = True
+        else:
+            self.device = config.local_device
+            self.has_disk = False
 
         self.put_queue: queue.Queue[
             Union[Tuple[CacheEngineKey, torch.Tensor],
@@ -64,6 +70,21 @@ class LMCLocalBackend(LMCBackendInterface):
 
         self.put_stream = torch.cuda.Stream()
 
+    def _key_to_path(
+        self,
+        key: CacheEngineKey,
+    ) -> str:
+        """
+        Convert key to path_name
+
+        Input:
+            key: the key of the token chunk, including prefix hash and format
+
+        Returns:
+            returns the path name
+        """
+        return self.path + key.to_string().replace("/", "-") + ".pt"
+
     def contains(
         self,
         key: CacheEngineKey,
@@ -77,7 +98,11 @@ class LMCLocalBackend(LMCBackendInterface):
         Returns:
             True if the cache engine contains the key, False otherwise
         """
-        return key in self.dict
+        if key in self.dict:
+            return True
+        filename = self._key_to_path(key)
+        return os.path.isfile(filename)
+        #return key in self.dict
 
     def remove(
         self,
@@ -128,6 +153,13 @@ class LMCLocalBackend(LMCBackendInterface):
 
         # Store new chunk
         self.dict[key] = kv_chunk_local
+
+        if self.has_disk:
+            logger.info("Writing to disk")
+            filename = self._key_to_path(key)
+            save_file({"kv_chunk": kv_chunk}, filename)
+            logger.info("Finished!")
+
         self.update_lock.release()
 
     def put_blocking(self, key, kv_chunk):
@@ -193,6 +225,18 @@ class LMCLocalBackend(LMCBackendInterface):
         """
         self.update_lock.acquire()
         kv_chunk = self.dict.get(key, None)
+
+        if kv_chunk is None:
+            filename = self._key_to_path(key)
+            logger.info(f"Try finding the file: {filename}")
+            if os.path.isfile(filename):
+                with safe_open(filename,
+                               framework="pt",
+                               device=self.dst_device) as f:  # type: ignore
+                    kv_chunk = f.get_tensor("kv_chunk")
+                    self.dict[key] = kv_chunk
+            else:
+                logger.info(f"Try finding the file but failed: {filename}")
 
         # Update cache recency
         if kv_chunk is not None:
@@ -313,6 +357,7 @@ class LMCLocalDiskBackend(LMCBackendInterface):
     def put_worker(self, ):
         put_stream = torch.cuda.Stream()
         while True:
+            time.sleep(0.01)
             item = self.put_queue.get()
             if isinstance(item, LocalBackendEndSignal):
                 break
@@ -343,6 +388,7 @@ class LMCLocalDiskBackend(LMCBackendInterface):
             self.remove(evict_key)
 
         save_file({"kv_chunk": kv_chunk}, path)
+        logger.info(f"chunk checksum {float(kv_chunk.mean()):.5f}")
         self.update_lock.acquire()
         self.dict[key] = DiskCacheMetadata(path,
                                            self.evictor.get_size(kv_chunk))
@@ -399,6 +445,7 @@ class LMCLocalDiskBackend(LMCBackendInterface):
                        device=self.dst_device) as f:  # type: ignore
             kv_chunk = f.get_tensor("kv_chunk")
         self.update_lock.release()
+        logger.info(f"chunk checksum {float(kv_chunk.mean()):.5f}")
         return kv_chunk
 
     def close(self):

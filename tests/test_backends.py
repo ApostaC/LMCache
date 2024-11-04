@@ -113,7 +113,7 @@ def test_creation_from_file(autorelease, lmserver_process):
         CreateStorageBackend(config_hybrid, get_metadata()))
 
     assert isinstance(backend_local, LMCLocalBackend)
-    assert isinstance(backend_disk, LMCLocalDiskBackend)
+    assert isinstance(backend_disk, LMCLocalDiskBackend) or isinstance(backend_disk, LMCLocalBackend)
     assert isinstance(backend_remote, LMCRemoteBackend)
     assert isinstance(backend_hybrid, LMCHybridBackend)
 

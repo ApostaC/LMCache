@@ -100,8 +100,12 @@ class LMCLocalBackend(LMCBackendInterface):
         """
         if key in self.dict:
             return True
-        filename = self._key_to_path(key)
-        return os.path.isfile(filename)
+
+        if self.has_disk:
+            filename = self._key_to_path(key)
+            return os.path.isfile(filename)
+        else:
+            return False
         #return key in self.dict
 
     def remove(

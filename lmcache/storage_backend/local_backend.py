@@ -1,4 +1,5 @@
 import os
+import time
 import queue
 import threading
 import time
@@ -21,6 +22,9 @@ logger = init_logger(__name__)
 
 
 class LocalBackendEndSignal:
+    pass
+
+class LocalBackendStartSignal:
     pass
 
 
@@ -106,7 +110,6 @@ class LMCLocalBackend(LMCBackendInterface):
             return os.path.isfile(filename)
         else:
             return False
-        #return key in self.dict
 
     def remove(
         self,
@@ -125,10 +128,17 @@ class LMCLocalBackend(LMCBackendInterface):
     def put_worker(self, ):
         while True:
             # TODO: dirty fix to downgrade the priority of the put worker
-            time.sleep(0.01)
             item = self.put_queue.get()
+
             if isinstance(item, LocalBackendEndSignal):
                 break
+
+            if isinstance(item, LocalBackendStartSignal):
+                logger.info("Received start signal! Wait for a few seconds")
+                time.sleep(3)
+                continue
+
+            time.sleep(0.01)
             key, value = item
             with torch.cuda.stream(self.put_stream):
                 self.put_nonblocking(key, value)
@@ -188,6 +198,21 @@ class LMCLocalBackend(LMCBackendInterface):
         # Store new chunk
         self.dict[key] = kv_chunk_local
 
+    def batched_put(
+            self, 
+            keys_and_chunks,
+            blocking = True,
+        ) -> int:
+        nchunks = 0
+        if not blocking:
+            self.put_queue.put(LocalBackendStartSignal())
+
+        for key, kv_chunk in keys_and_chunks:
+            self.put(key, kv_chunk, blocking=blocking)
+            nchunks += 1
+        return nchunks
+
+
     def put(
         self,
         key: CacheEngineKey,
@@ -234,13 +259,13 @@ class LMCLocalBackend(LMCBackendInterface):
             filename = self._key_to_path(key)
             logger.info(f"Try finding the file: {filename}")
             if os.path.isfile(filename):
-                with safe_open(filename,
-                               framework="pt",
+                with safe_open(filename, framework="pt",
                                device=self.dst_device) as f:  # type: ignore
                     kv_chunk = f.get_tensor("kv_chunk")
                     self.dict[key] = kv_chunk
             else:
                 logger.info(f"Try finding the file but failed: {filename}")
+
 
         # Update cache recency
         if kv_chunk is not None:

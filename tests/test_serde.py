@@ -2,7 +2,7 @@ import pytest
 import torch
 
 from lmcache.config import LMCacheEngineConfig, LMCacheEngineMetadata
-from lmcache.storage_backend.serde.cachegen_basics import CacheGenEncoderOutput
+from lmcache.storage_backend.serde.cachegen_basics import CacheGenGPUEncoderOutput
 from lmcache.storage_backend.serde.cachegen_decoder import CacheGenDeserializer
 from lmcache.storage_backend.serde.cachegen_encoder import CacheGenSerializer
 
@@ -57,7 +57,7 @@ def test_cachegen_encoder(chunk_size):
     output2 = serializer2.to_bytes(kv2)
 
     assert abs(len(output) - len(output2)) < 10
-    output_dict = CacheGenEncoderOutput.from_bytes(output)
+    output_dict = CacheGenGPUEncoderOutput.from_bytes(output)
     assert output_dict.num_heads == 8
     assert output_dict.head_size == 128
 

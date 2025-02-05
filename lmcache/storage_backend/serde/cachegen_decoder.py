@@ -7,7 +7,7 @@ import lmcache.storage_backend.serde.cachegen_basics as CGBasics
 from lmcache.config import LMCacheEngineConfig, LMCacheEngineMetadata
 from lmcache.logging import init_logger
 from lmcache.storage_backend.serde.cachegen_basics import (
-    CacheGenConfig, CacheGenGPUBytestream, CacheGenGPUEncoderOutput)
+    CacheGenConfig, CacheGenGPUBytestream)
 from lmcache.storage_backend.serde.serde import Deserializer
 from lmcache.utils import _lmcache_nvtx_annotate
 
@@ -119,6 +119,10 @@ class CacheGenDeserializer(Deserializer):
         self.key_bins = self.make_key_bins(self.cachegen_config)
         self.value_bins = self.make_value_bins(self.cachegen_config)
 
+        # TODO: remove the hard-coded value here
+        self.fast_serializer = CGBasics.CacheGenEncoderOutputSerializer(
+            50 * 1024 * 1024)
+
     def make_key_bins(self, config: CacheGenConfig) -> torch.Tensor:
         ret = torch.zeros(config.nlayers)
         for spec in config.kspecs:
@@ -141,7 +145,8 @@ class CacheGenDeserializer(Deserializer):
 
     @_lmcache_nvtx_annotate
     def from_bytes(self, bs: bytes) -> torch.Tensor:
-        encoder_output = CacheGenGPUEncoderOutput.from_bytes(bs)
+        #encoder_output = CacheGenGPUEncoderOutput.from_bytes(bs)
+        encoder_output = self.fast_serializer.deserialize(bs)
         encoder_output.max_tensors_key = encoder_output.max_tensors_key.cuda()
         encoder_output.max_tensors_value = (
             encoder_output.max_tensors_value.cuda())

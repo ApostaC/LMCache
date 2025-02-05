@@ -10,6 +10,7 @@ from lmcache.experimental.storage_backend.naive_serde.cachegen_basics import \
 from lmcache.experimental.storage_backend.naive_serde.serde import Serializer
 from lmcache.logging import init_logger
 from lmcache.storage_backend.serde.cachegen_encoder import encode_function
+from lmcache.storage_backend.serde.cachegen_basics import CacheGenEncoderOutputSerializer
 from lmcache.utils import _lmcache_nvtx_annotate
 
 logger = init_logger(__name__)
@@ -30,6 +31,10 @@ class CacheGenSerializer(Serializer):
         self.kv_shape = metadata.kv_shape
 
         self.memory_allocator = memory_allocator
+
+        # TODO: remove hard-code
+        self.fast_serializer = CacheGenEncoderOutputSerializer(
+            50 * 1024 * 1024)  # 50MB
 
     def make_key_bins(self, config: CacheGenConfig) -> torch.Tensor:
         ret = torch.zeros(config.nlayers)
@@ -88,4 +93,6 @@ class CacheGenSerializer(Serializer):
             ntokens,
         )
 
-        return BytesBufferMemoryObj(output_dict.to_bytes())
+        return BytesBufferMemoryObj(
+            self.fast_serializer.serialize(output_dict))
+        #return BytesBufferMemoryObj(output_dict.to_bytes())

@@ -275,7 +275,8 @@ class NixlPipe:
                                                self._local_xfer_handlers,
                                                desc_indexes,
                                                self._remote_xfer_handlers,
-                                               desc_indexes)
+                                               desc_indexes,
+                                               notif_msg=uuid_to_message(uid))
         t2 = time.perf_counter()
 
         self._agent.transfer(handle)  #, uuid_to_message(uid))
@@ -293,8 +294,6 @@ class NixlPipe:
                     f"Failed to send data to remote peer: {self.peer_name}, "
                     f"status: {status}")
         t3 = time.perf_counter()
-
-        self._agent.send_notif(self.peer_name, uuid_to_message(uid))
 
         logger.debug(
             "Transfer %s completed in %.4f ms, creating the transfer: %.4f ms,"

@@ -53,6 +53,9 @@ class RequestType(enum.Enum):
     # MOVE = enum.auto()
     # COMPRESS = enum.auto()
 
+    # Request-level information update commands
+    UPDATE_REQUEST_INFO = enum.auto()
+
     # For configuration read commands (vllm integration)
     GET_CHUNK_SIZE = enum.auto()
 
@@ -154,6 +157,20 @@ _PROTOCOL_DEFINTIONS = {
     # - Returns: None
     RequestType.CLEAR: ProtocolDefinition(
         payload_classes=[],
+        response_class=None,
+        handler_type=HandlerType.BLOCKING,
+    ),
+    # Request-level information update command
+    # UpdateRequestInfo
+    # - request_id: str
+    # - request_text: str
+    # - tokens: list[int]
+    # - positions: list[int]
+    # - hashes: list[bytes]
+    # Returns: None
+    # NOTE: this interface is subject to change
+    RequestType.UPDATE_REQUEST_INFO: ProtocolDefinition(
+        payload_classes=[str, str, list[int], list[int], list[bytes]],
         response_class=None,
         handler_type=HandlerType.BLOCKING,
     ),

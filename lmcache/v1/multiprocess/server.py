@@ -26,6 +26,12 @@ from lmcache.logging import init_logger
 from lmcache.utils import _lmcache_nvtx_annotate
 from lmcache.v1.memory_management import MemoryObj, MixedMemoryAllocator
 from lmcache.v1.multiprocess.custom_types import IPCCacheEngineKey, KVCache
+from lmcache.v1.multiprocess.database import (
+    MemoryObjStats,
+    add_request_information,
+    initialize_database,
+    update_memory_objects_information,
+)
 from lmcache.v1.multiprocess.mq import MessageQueueServer
 from lmcache.v1.multiprocess.protocol import (
     RequestType,
@@ -191,7 +197,12 @@ class GPUCacheContext:
 
 
 class MPCacheEngine:
-    def __init__(self, chunk_size: int = 256, cpu_buffer_size: float = 5.0):
+    def __init__(
+        self,
+        chunk_size: int = 256,
+        cpu_buffer_size: float = 5.0,
+        db_path: str | None = None,
+    ):
         # GPU ID -> KV cache tensors
         self.gpu_contexts: dict[int, GPUCacheContext] = {}
 
@@ -203,7 +214,15 @@ class MPCacheEngine:
         self.chunk_size = chunk_size
 
         # Temp CPU buffer for debug
+        # - Key -> MemoryObj
+        # - Key -> (retrieve count, chunk size in bytes)
         self.hot_buffer: dict[IPCCacheEngineKey, MemoryObj] = {}
+        self.meta_buffer: dict[IPCCacheEngineKey, MemoryObjStats] = {}
+
+        # Temp code for database
+        if db_path is not None:
+            self.db_enabled = True
+            self.db_conn = initialize_database(db_path, read_only=False)
 
     def register_kv_cache(self, instance_id: int, kv_caches: KVCache) -> None:
         gpu_context = GPUCacheContext(kv_caches)
@@ -283,6 +302,7 @@ class MPCacheEngine:
 
                 memory_obj.tensor.copy_(tmp_buffer, non_blocking=True)
                 self.hot_buffer[key] = memory_obj
+                self.meta_buffer[key] = MemoryObjStats(memory_obj)
             event.record()
 
         ed = time.perf_counter()
@@ -356,6 +376,8 @@ class MPCacheEngine:
                 )
                 results.append(True)
 
+                self.meta_buffer[key].on_hit()
+
             event.record()
 
         tokens_retrieved = sum(results) * self.chunk_size
@@ -382,6 +404,40 @@ class MPCacheEngine:
             exists = key in self.hot_buffer
             results.append(exists)
         return results
+
+    @_lmcache_nvtx_annotate
+    def _update_memory_obj_info(self):
+        if not self.db_enabled:
+            return
+
+        final_keys = []
+        final_stats = []
+        for key in self.meta_buffer:
+            if self.meta_buffer[key].logged:
+                continue
+            final_keys.append(key)
+            final_stats.append(self.meta_buffer[key])
+            self.meta_buffer[key].on_log()
+
+        update_memory_objects_information(self.db_conn, final_keys, final_stats)
+
+    @_lmcache_nvtx_annotate
+    def update_request_info(
+        self,
+        request_id: str,
+        request_text: str,
+        tokens: list[int],
+        positions: list[int],
+        hashes: list[bytes],
+    ) -> None:
+        if not self.db_enabled:
+            return
+
+        add_request_information(
+            self.db_conn, request_id, request_text, tokens, positions, hashes
+        )
+
+        # self._update_memory_obj_info()
 
     def debug(self) -> str:
         if not hasattr(self, "_checked_keys"):
@@ -446,9 +502,10 @@ def run_cache_server(
     chunk_size: int = 256,
     cpu_buffer_size: float = 5.0,
     max_workers: int = 1,
+    db_path: str | None = None,
 ):
     # Initialize the engine
-    engine = MPCacheEngine(chunk_size, cpu_buffer_size)
+    engine = MPCacheEngine(chunk_size, cpu_buffer_size, db_path)
 
     # Initialize the message queue server
     context = zmq.Context.instance()
@@ -465,7 +522,13 @@ def run_cache_server(
     add_handler_helper(server, RequestType.LOOKUP, engine.lookup)
     add_handler_helper(server, RequestType.RETRIEVE, engine.retrieve)
     add_handler_helper(server, RequestType.CLEAR, engine.clear)
+
+    add_handler_helper(
+        server, RequestType.UPDATE_REQUEST_INFO, engine.update_request_info
+    )
+
     add_handler_helper(server, RequestType.GET_CHUNK_SIZE, engine.get_chunk_size)
+
     add_handler_helper(server, RequestType.NOOP, engine.debug)
 
     # Start the server
@@ -499,6 +562,9 @@ def parse_args():
     parser.add_argument(
         "--max-workers", type=int, default=1, help="Maximum number of worker threads"
     )
+    parser.add_argument(
+        "--db-path", type=str, default=None, help="Path to the database file"
+    )
     return parser.parse_args()
 
 
@@ -510,4 +576,5 @@ if __name__ == "__main__":
         chunk_size=args.chunk_size,
         cpu_buffer_size=args.cpu_buffer_size,
         max_workers=args.max_workers,
+        db_path=args.db_path,
     )

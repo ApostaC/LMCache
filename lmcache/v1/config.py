@@ -368,35 +368,6 @@ _CONFIG_DEFINITIONS: dict[str, dict[str, Any]] = {
             "Default is 0.2 (20%)."
         ),
     },
-    "lazy_memory_expand_trigger_ratio": {
-        "type": float,
-        "default": 0.5,
-        "env_converter": float,
-        "description": (
-            "Memory usage ratio (0.0-1.0) that triggers automatic expansion. "
-            "When memory usage exceeds this threshold, expansion is triggered. "
-            "Default is 0.5 (50%)."
-        ),
-    },
-    "lazy_memory_step_ratio": {
-        "type": float,
-        "default": 0.1,
-        "env_converter": float,
-        "description": (
-            "Memory expansion step ratio (0.0-1.0). "
-            "Determines the percentage of target memory size to add in each expansion. "
-            "Default is 0.1 (10%)."
-        ),
-    },
-    "lazy_memory_safe_size": {
-        "type": float,
-        "default": 0.0,
-        "env_converter": float,
-        "description": (
-            "Safe threshold size in GB. Lazy allocator is only enabled when "
-            "max_local_cpu_size exceeds this value. Default is 0.0 GB (always enabled)."
-        ),
-    },
     # Chunk statistics configurations
     "enable_chunk_statistics": {
         "type": bool,

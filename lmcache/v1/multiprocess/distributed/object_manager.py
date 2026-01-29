@@ -199,37 +199,6 @@ class L1ObjectManager:
         # TTL:
         self._lock_ttl = config.lock_ttl_seconds
 
-    def _has_key(self, key: ObjectKey) -> bool:
-        """Thread-safe function to check if the key exists in either reserved
-        or committed dicts.
-
-        Args:
-            key: The key to check.
-        Returns:
-            True if the key exists, False otherwise.
-        Note:
-            This function will acquire both reserved and committed locks.
-        """
-        with self._reserved_lock, self._committed_lock:
-            return key in self._reserved or key in self._committed
-
-    def _get_entry(self, key: ObjectKey) -> L1ObjectEntry | None:
-        """Thread-safe function to get the L1ObjectEntry for the given key.
-
-        Args:
-            key: The key to get the entry for.
-
-        Returns:
-            The L1ObjectEntry if the key exists, None otherwise.
-        """
-        with self._reserved_lock, self._committed_lock:
-            if key in self._reserved:
-                return self._reserved[key]
-            elif key in self._committed:
-                return self._committed[key]
-            else:
-                return None
-
     def prereserve_forced(
         self,
         keys: Iterable[ObjectKey],
@@ -376,9 +345,10 @@ class L1ObjectManager:
 
         return result
 
-    def mark_reserved_must(
+    def mark_reserved(
         self,
         keys: Iterable[ObjectKey],
+        force: bool,
     ) -> L1OperationResult:
         """
         Change the existing "committed" keys as "reserved". The input keys
@@ -387,8 +357,12 @@ class L1ObjectManager:
         If multiple threads try to mark the same set of keys as reserved, only
         one thread will succeed for each key.
 
-        When error happens, the function will have "ALL OR NOTHING" semantics.
-        It's expected for the caller to "retry" or "abort" when the function fails.
+        When error happens, the function support both "FORCED" or "ALL OR NOTHING"
+        semantics.
+        - "FORCED": the function will try its best to mark the keys as reserved,
+          and skip the keys that cannot be marked.
+        - "ALL OR NOTHING": It will mark no keys as reserved if any key fails to
+          be marked.
 
         Args:
             keys: The keys to mark as "reserved".
@@ -414,16 +388,25 @@ class L1ObjectManager:
             for key in keys:
                 if key not in self._committed:
                     result.add_error(key, L1ObjectManagerError.KEYS_NOT_COMMITTED)
-                    break
+                    if force:
+                        continue
+                    else:
+                        break
 
                 entry = self._committed[key]
                 if entry.ttl_lock.is_locked():
                     result.add_error(key, L1ObjectManagerError.KEYS_ALREADY_LOCKED)
-                    break
+                    if force:
+                        continue
+                    else:
+                        break
 
                 if entry.is_temporary:
                     result.add_error(key, L1ObjectManagerError.KEYS_ARE_TEMPORARY)
-                    break
+                    if force:
+                        continue
+                    else:
+                        break
 
                 # Move the entry from committed to reserved
                 entry = self._committed.pop(key)
@@ -431,14 +414,14 @@ class L1ObjectManager:
                 self._reserved[key] = entry
                 result.add_success(key)
 
-            if not result.is_successful():
+            if not result.is_successful() and not force:
                 # Rollback
                 for key in result.success_keys:
                     entry = self._reserved.pop(key)
                     entry.mark_as_committed()
                     self._committed[key] = entry
 
-        if not result.is_successful():
+        if not result.is_successful() and not force:
             # Mark the remaining keys as skipped
             num_processed = len(result.success_keys) + len(result.failed_keys)
             result.mark_success_as_skipped()
@@ -809,3 +792,35 @@ class L1ObjectManager:
                 result.add_skipped(key)
 
         return result
+
+    # Helper functions
+    def _has_key(self, key: ObjectKey) -> bool:
+        """Thread-safe function to check if the key exists in either reserved
+        or committed dicts.
+
+        Args:
+            key: The key to check.
+        Returns:
+            True if the key exists, False otherwise.
+        Note:
+            This function will acquire both reserved and committed locks.
+        """
+        with self._reserved_lock, self._committed_lock:
+            return key in self._reserved or key in self._committed
+
+    def _get_entry(self, key: ObjectKey) -> L1ObjectEntry | None:
+        """Thread-safe function to get the L1ObjectEntry for the given key.
+
+        Args:
+            key: The key to get the entry for.
+
+        Returns:
+            The L1ObjectEntry if the key exists, None otherwise.
+        """
+        with self._reserved_lock, self._committed_lock:
+            if key in self._reserved:
+                return self._reserved[key]
+            elif key in self._committed:
+                return self._committed[key]
+            else:
+                return None

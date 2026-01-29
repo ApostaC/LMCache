@@ -1433,18 +1433,18 @@ class TestCommitThreadSafety(L1ObjectManagerTestBase):
 
 
 # =============================================================================
-# Tests for L1ObjectManager.mark_reserved_must()
+# Tests for L1ObjectManager.mark_reserved()
 # =============================================================================
 
 
-class TestMarkReservedMust(L1ObjectManagerTestBase):
+class TestMarkReserved(L1ObjectManagerTestBase):
     """
-    Tests for L1ObjectManager.mark_reserved_must() method.
+    Tests for L1ObjectManager.mark_reserved() method.
 
     Per the docstring:
     - Thread-safe function to change state from "committed" to "reserved"
     - Keys must be "committed", "unlocked", and not "temporary"
-    - Uses ALL-OR-NOTHING semantics
+    - Supports both "FORCED" and "ALL-OR-NOTHING" semantics via force parameter
     - Returns KEYS_NOT_COMMITTED, KEYS_ALREADY_LOCKED, or KEYS_ARE_TEMPORARY
     """
 
@@ -1469,7 +1469,7 @@ class TestMarkReservedMust(L1ObjectManagerTestBase):
         self.assert_keys_committed(manager, [key])
 
         # Mark as reserved
-        result = manager.mark_reserved_must([key])
+        result = manager.mark_reserved([key], force=False)
 
         self.assert_result_successful(result, expected_success_count=1)
         self.assert_keys_in_success(result, [key])
@@ -1487,7 +1487,7 @@ class TestMarkReservedMust(L1ObjectManagerTestBase):
         self.assert_keys_committed(manager, keys_5)
 
         # Mark as reserved
-        result = manager.mark_reserved_must(keys_5)
+        result = manager.mark_reserved(keys_5, force=False)
 
         self.assert_result_successful(result, expected_success_count=5)
         self.assert_keys_in_success(result, keys_5)
@@ -1497,13 +1497,13 @@ class TestMarkReservedMust(L1ObjectManagerTestBase):
 
     def test_mark_reserved_empty_keys_success(self, manager):
         """Test marking empty key list as reserved returns success."""
-        result = manager.mark_reserved_must([])
+        result = manager.mark_reserved([], force=False)
 
         self.assert_result_successful(result, expected_success_count=0)
 
     def test_mark_reserved_not_committed_fails(self, manager, keys_3):
         """Test that marking non-committed keys fails."""
-        result = manager.mark_reserved_must(keys_3)
+        result = manager.mark_reserved(keys_3, force=False)
 
         self.assert_result_has_error(result, L1ObjectManagerError.KEYS_NOT_COMMITTED)
 
@@ -1512,7 +1512,7 @@ class TestMarkReservedMust(L1ObjectManagerTestBase):
         # Only pre-reserve
         manager.prereserve_forced(keys_3)
 
-        result = manager.mark_reserved_must(keys_3)
+        result = manager.mark_reserved(keys_3, force=False)
 
         self.assert_result_has_error(result, L1ObjectManagerError.KEYS_NOT_COMMITTED)
 
@@ -1526,7 +1526,7 @@ class TestMarkReservedMust(L1ObjectManagerTestBase):
         self._prepare_committed_keys(manager, keys_5[:3], memory_objs_5[:3])
 
         # Try to mark all 5 keys (last 2 will fail)
-        result = manager.mark_reserved_must(keys_5)
+        result = manager.mark_reserved(keys_5, force=False)
 
         self.assert_result_has_error(result, L1ObjectManagerError.KEYS_NOT_COMMITTED)
 
@@ -1552,7 +1552,7 @@ class TestMarkReservedMust(L1ObjectManagerTestBase):
         self._prepare_committed_keys(manager, keys_5[:3], memory_objs_5[:3])
 
         # Try to mark all 5 keys (4th will fail)
-        result = manager.mark_reserved_must(keys_5)
+        result = manager.mark_reserved(keys_5, force=False)
         assert not result.is_successful()
 
         # Verify first 3 keys are still committed (rollback worked)
@@ -1560,7 +1560,7 @@ class TestMarkReservedMust(L1ObjectManagerTestBase):
 
         # After rollback, first 3 keys should still be committed
         # We can verify by successfully marking them again
-        second_result = manager.mark_reserved_must(keys_5[:3])
+        second_result = manager.mark_reserved(keys_5[:3], force=False)
         self.assert_result_successful(second_result, expected_success_count=3)
 
         # Verify first 3 keys are now reserved
@@ -1575,7 +1575,7 @@ class TestMarkReservedMust(L1ObjectManagerTestBase):
         self.assert_keys_committed(manager, keys_3)
 
         # Mark as reserved
-        mark_result = manager.mark_reserved_must(keys_3)
+        mark_result = manager.mark_reserved(keys_3, force=False)
         self.assert_result_successful(mark_result, expected_success_count=3)
 
         # Verify keys are now reserved
@@ -1590,7 +1590,7 @@ class TestMarkReservedMust(L1ObjectManagerTestBase):
 
     def test_mark_reserved_failed_reasons_match_failed_keys(self, manager, keys_3):
         """Test that failed_reasons has same length as failed_keys."""
-        result = manager.mark_reserved_must(keys_3)
+        result = manager.mark_reserved(keys_3, force=False)
 
         # Due to ALL-OR-NOTHING, only first failing key is in failed_keys
         assert len(result.failed_keys) == len(result.failed_reasons)
@@ -1598,8 +1598,224 @@ class TestMarkReservedMust(L1ObjectManagerTestBase):
             assert result.failed_reasons[0] == L1ObjectManagerError.KEYS_NOT_COMMITTED
 
 
-class TestMarkReservedMustThreadSafety(L1ObjectManagerTestBase):
-    """Thread-safety tests for mark_reserved_must()."""
+class TestMarkReservedForced(L1ObjectManagerTestBase):
+    """
+    Tests for L1ObjectManager.mark_reserved() with force=True (FORCED semantics).
+
+    Per the docstring:
+    - FORCED semantics: tries to mark as many keys as possible
+    - Does NOT rollback on failure
+    - Continues processing after encountering errors
+    - All keys are processed (no skipping)
+    """
+
+    def _prepare_committed_keys(self, manager, keys, memory_objs):
+        """Helper to prepare keys in committed state."""
+        manager.prereserve_forced(keys)
+        manager.postreserve_must(keys, memory_objs)
+        result = manager.commit(keys, force=False)
+        assert result.is_successful(), (
+            f"Failed to prepare committed keys: {result.error}"
+        )
+
+    def test_mark_reserved_forced_single_key_success(
+        self, manager, keys_3, memory_objs_3
+    ):
+        """Test marking a single committed key as reserved with force=True."""
+        key = keys_3[0]
+        obj = memory_objs_3[0]
+
+        # Prepare committed key
+        self._prepare_committed_keys(manager, [key], [obj])
+
+        # Mark as reserved with force=True
+        result = manager.mark_reserved([key], force=True)
+
+        self.assert_result_successful(result, expected_success_count=1)
+        self.assert_keys_in_success(result, [key])
+        self.assert_keys_reserved(manager, [key])
+
+    def test_mark_reserved_forced_multiple_keys_success(
+        self, manager, keys_5, memory_objs_5
+    ):
+        """Test marking multiple committed keys as reserved with force=True."""
+        self._prepare_committed_keys(manager, keys_5, memory_objs_5)
+
+        result = manager.mark_reserved(keys_5, force=True)
+
+        self.assert_result_successful(result, expected_success_count=5)
+        self.assert_keys_in_success(result, keys_5)
+        self.assert_keys_reserved(manager, keys_5)
+
+    def test_mark_reserved_forced_partial_success_no_rollback(
+        self, manager, keys_5, memory_objs_5
+    ):
+        """
+        Test FORCED semantics: successful keys are marked even if some fail.
+
+        Unlike ALL-OR-NOTHING, with force=True:
+        - Successfully marked keys remain marked (no rollback)
+        - Processing continues after failures
+        """
+        # Only commit first 3 keys
+        self._prepare_committed_keys(manager, keys_5[:3], memory_objs_5[:3])
+
+        # Try to mark all 5 keys with force=True
+        result = manager.mark_reserved(keys_5, force=True)
+
+        # Result should indicate partial failure
+        assert not result.is_successful()
+
+        # First 3 keys should succeed
+        assert len(result.success_keys) == 3
+        self.assert_keys_in_success(result, keys_5[:3])
+
+        # Last 2 keys should fail
+        assert len(result.failed_keys) == 2
+        for key in keys_5[3:]:
+            assert key in result.failed_keys
+
+        # No skipped keys with FORCED semantics
+        assert len(result.skipped_keys) == 0
+
+        # Verify first 3 keys are now reserved (NOT rolled back)
+        self.assert_keys_reserved(manager, keys_5[:3])
+
+        # Verify last 2 keys still don't exist
+        self.assert_keys_not_exist(manager, keys_5[3:])
+
+    def test_mark_reserved_forced_all_keys_processed(
+        self, manager, keys_5, memory_objs_5
+    ):
+        """
+        Test that with force=True, all keys are processed even after failures.
+
+        In contrast to ALL-OR-NOTHING which stops at first failure.
+        """
+        # Commit only keys at indices 0, 2, 4 (alternating pattern)
+        committed_keys = [keys_5[0], keys_5[2], keys_5[4]]
+        committed_objs = [memory_objs_5[0], memory_objs_5[2], memory_objs_5[4]]
+        self._prepare_committed_keys(manager, committed_keys, committed_objs)
+
+        # Try to mark all 5 keys
+        result = manager.mark_reserved(keys_5, force=True)
+
+        # 3 should succeed, 2 should fail
+        assert len(result.success_keys) == 3
+        assert len(result.failed_keys) == 2
+
+        # Verify the correct keys succeeded
+        self.assert_keys_in_success(result, committed_keys)
+
+        # Verify all failed keys are recorded (not just the first one)
+        for key in [keys_5[1], keys_5[3]]:
+            assert key in result.failed_keys
+
+        # Verify committed keys are now reserved
+        self.assert_keys_reserved(manager, committed_keys)
+
+    def test_mark_reserved_forced_all_fail(self, manager, keys_3):
+        """Test force=True when all keys fail (none committed)."""
+        result = manager.mark_reserved(keys_3, force=True)
+
+        assert not result.is_successful()
+        assert len(result.success_keys) == 0
+        assert len(result.failed_keys) == 3
+
+        # All failures should be KEYS_NOT_COMMITTED
+        for reason in result.failed_reasons:
+            assert reason == L1ObjectManagerError.KEYS_NOT_COMMITTED
+
+    def test_mark_reserved_forced_failed_reasons_match_failed_keys(
+        self, manager, keys_5, memory_objs_5
+    ):
+        """Test that each failed key has a corresponding failure reason."""
+        # Only commit first 2 keys
+        self._prepare_committed_keys(manager, keys_5[:2], memory_objs_5[:2])
+
+        result = manager.mark_reserved(keys_5, force=True)
+
+        # 3 keys should fail
+        assert len(result.failed_keys) == 3
+        assert len(result.failed_reasons) == 3
+
+        # Each reason should be KEYS_NOT_COMMITTED
+        for reason in result.failed_reasons:
+            assert reason == L1ObjectManagerError.KEYS_NOT_COMMITTED
+
+    def test_mark_reserved_forced_locked_keys_fail(
+        self, manager, keys_5, memory_objs_5
+    ):
+        """Test force=True skips locked keys but marks unlocked ones."""
+        self._prepare_committed_keys(manager, keys_5, memory_objs_5)
+
+        # Lock first 2 keys
+        manager.lock(keys_5[:2], force=False)
+
+        # Try to mark all 5 keys
+        result = manager.mark_reserved(keys_5, force=True)
+
+        # First 2 should fail (locked), last 3 should succeed
+        assert len(result.success_keys) == 3
+        assert len(result.failed_keys) == 2
+
+        # Verify correct keys in each list
+        for key in keys_5[:2]:
+            assert key in result.failed_keys
+        for key in keys_5[2:]:
+            assert key in result.success_keys
+
+        # Verify failure reasons are KEYS_ALREADY_LOCKED
+        for reason in result.failed_reasons:
+            assert reason == L1ObjectManagerError.KEYS_ALREADY_LOCKED
+
+        # Verify last 3 keys are reserved
+        self.assert_keys_reserved(manager, keys_5[2:])
+
+        # First 2 keys should still be committed (and locked)
+        self.assert_keys_committed(manager, keys_5[:2])
+        self.assert_keys_locked(manager, keys_5[:2])
+
+    def test_mark_reserved_forced_mixed_failure_reasons(
+        self, manager, keys_5, memory_objs_5
+    ):
+        """Test force=True with mixed failure reasons."""
+        # Commit and lock first key
+        self._prepare_committed_keys(manager, [keys_5[0]], [memory_objs_5[0]])
+        manager.lock([keys_5[0]], force=False)
+
+        # Commit but don't lock second key
+        self._prepare_committed_keys(manager, [keys_5[1]], [memory_objs_5[1]])
+
+        # Keys 2, 3, 4 are not committed at all
+
+        # Try to mark all 5 keys
+        result = manager.mark_reserved(keys_5, force=True)
+
+        # Key 0: fails (locked)
+        # Key 1: succeeds
+        # Keys 2, 3, 4: fail (not committed)
+        assert len(result.success_keys) == 1
+        assert keys_5[1] in result.success_keys
+
+        assert len(result.failed_keys) == 4
+
+        # Verify key 1 is now reserved
+        self.assert_keys_reserved(manager, [keys_5[1]])
+
+        # Verify key 0 is still committed and locked
+        self.assert_keys_committed(manager, [keys_5[0]])
+        self.assert_keys_locked(manager, [keys_5[0]])
+
+    def test_mark_reserved_forced_empty_keys(self, manager):
+        """Test force=True with empty key list returns success."""
+        result = manager.mark_reserved([], force=True)
+
+        self.assert_result_successful(result, expected_success_count=0)
+
+
+class TestMarkReservedThreadSafety(L1ObjectManagerTestBase):
+    """Thread-safety tests for mark_reserved()."""
 
     def _prepare_committed_keys(self, manager, keys, memory_objs):
         """Helper to prepare keys in committed state."""
@@ -1628,7 +1844,7 @@ class TestMarkReservedMustThreadSafety(L1ObjectManagerTestBase):
 
         def mark_task(thread_id):
             try:
-                result = manager.mark_reserved_must(all_keys[thread_id])
+                result = manager.mark_reserved(all_keys[thread_id], force=False)
                 with lock:
                     results.append(result)
             except Exception as e:
@@ -1669,7 +1885,7 @@ class TestMarkReservedMustThreadSafety(L1ObjectManagerTestBase):
 
         def mark_task(thread_id):
             try:
-                result = manager.mark_reserved_must(keys_5)
+                result = manager.mark_reserved(keys_5, force=False)
                 with lock:
                     results.append((thread_id, result))
             except Exception as e:
@@ -1709,7 +1925,7 @@ class TestMarkReservedMustThreadSafety(L1ObjectManagerTestBase):
                     manager.prereserve_forced(keys)
                     manager.postreserve_must(keys, objs)
                     manager.commit(keys, force=False)
-                    manager.mark_reserved_must(keys)
+                    manager.mark_reserved(keys, force=False)
                     manager.commit(keys, force=False)
             except Exception as e:
                 with lock:
@@ -1730,7 +1946,7 @@ class TestMarkReservedMustThreadSafety(L1ObjectManagerTestBase):
 
 class TestCommitAndMarkReservedIntegration(L1ObjectManagerTestBase):
     """
-    Integration tests combining commit and mark_reserved_must operations.
+    Integration tests combining commit and mark_reserved operations.
     """
 
     def test_full_state_cycle(self, manager, keys_3, memory_objs_3):
@@ -1751,7 +1967,7 @@ class TestCommitAndMarkReservedIntegration(L1ObjectManagerTestBase):
         self.assert_result_successful(commit_result1, expected_success_count=3)
 
         # Mark as reserved (for update)
-        mark_result = manager.mark_reserved_must(keys_3)
+        mark_result = manager.mark_reserved(keys_3, force=False)
         self.assert_result_successful(mark_result, expected_success_count=3)
 
         # Commit again
@@ -1767,7 +1983,7 @@ class TestCommitAndMarkReservedIntegration(L1ObjectManagerTestBase):
 
         # Multiple cycles
         for _ in range(5):
-            mark_result = manager.mark_reserved_must(keys_3)
+            mark_result = manager.mark_reserved(keys_3, force=False)
             self.assert_result_successful(mark_result, expected_success_count=3)
 
             commit_result = manager.commit(keys_3, force=False)
@@ -1794,7 +2010,7 @@ class TestCommitAndMarkReservedIntegration(L1ObjectManagerTestBase):
                     manager.prereserve_forced(keys)
                     manager.postreserve_must(keys, objs)
                     manager.commit(keys, force=False)
-                    manager.mark_reserved_must(keys)
+                    manager.mark_reserved(keys, force=False)
                     manager.commit(keys, force=False)
             except Exception as e:
                 with lock:
@@ -2220,7 +2436,7 @@ class TestLockUnlockIntegration(L1ObjectManagerTestBase):
         self.assert_keys_unlocked(manager, keys_3)
 
         # Mark as reserved (for update)
-        mark_result = manager.mark_reserved_must(keys_3)
+        mark_result = manager.mark_reserved(keys_3, force=False)
         self.assert_result_successful(mark_result, expected_success_count=3)
         self.assert_keys_reserved(manager, keys_3)
 
@@ -2599,16 +2815,16 @@ class TestLookupAndLockForcedThreadSafety(L1ObjectManagerTestBase):
 
     def test_lookup_and_lock_vs_mark_reserved_contention(self, manager):
         """
-        Test concurrent lookup_and_lock vs mark_reserved_must operations.
+        Test concurrent lookup_and_lock vs mark_reserved operations.
 
         This tests the interaction between:
         - Thread A: lookup_and_lock on committed objects, verify locked state via
           query_states, then unlock
-        - Thread B: try to mark_reserved_must on committed objects one by one,
+        - Thread B: try to mark_reserved on committed objects one by one,
           wait a bit, then commit them back
 
         Expected behavior:
-        - mark_reserved_must should fail on locked objects (KEYS_ALREADY_LOCKED)
+        - mark_reserved should fail on locked objects (KEYS_ALREADY_LOCKED)
         - After all operations complete, system should be in consistent state:
           all objects committed and unlocked
         """
@@ -2691,7 +2907,7 @@ class TestLookupAndLockForcedThreadSafety(L1ObjectManagerTestBase):
                     key = random.choice(keys)
 
                     # Try to mark as reserved (one key at a time to avoid rollback)
-                    result = manager.mark_reserved_must([key])
+                    result = manager.mark_reserved([key], force=False)
 
                     if result.is_successful():
                         # Successfully marked as reserved
@@ -2712,7 +2928,7 @@ class TestLookupAndLockForcedThreadSafety(L1ObjectManagerTestBase):
                             f"Commit after mark_reserved should succeed for key {key}"
                         )
                     else:
-                        # mark_reserved_must failed - expected if key was locked
+                        # mark_reserved failed - expected if key was locked
                         # or in reserved state (by another iteration)
                         pass
 

@@ -1,0 +1,320 @@
+"""
+Main interface for distributed MP storage manager
+"""
+
+from typing import Iterable, Iterator
+from contextlib import contextmanager
+import threading
+
+from lmcache.v1.multiprocess.distributed.error import (
+    L1MemoryManagerError,
+    L1ObjectManagerError,
+    ErrorType,
+    is_successful,
+    strerror,
+)
+from lmcache.v1.multiprocess.distributed.config import StorageManagerConfig
+from lmcache.v1.multiprocess.distributed.api import (
+    ObjectKey, 
+    MemoryLayoutDesc, 
+    ReserveResult,
+    PrefetchHandle,
+)
+from lmcache.v1.multiprocess.distributed.internal_api import L1OperationResult
+from lmcache.v1.multiprocess.distributed.memory_manager import L1MemoryManager
+from lmcache.v1.multiprocess.distributed.object_manager import L1ObjectManager
+from lmcache.v1.multiprocess.distributed.memory_obj import MemoryObj
+from lmcache.logging import init_logger
+
+logger = init_logger(__name__)
+
+# Helper function
+def maybe_report_unprocessed_error(error: ErrorType, parent_func: str) -> None:
+    """
+    Report the error if it's not SUCCESS.
+    Currently, it just raises an exception.
+    """
+    if not is_successful(error):
+        error_msg = strerror(error)
+        logger.error("[StorageManager.%s] Unprocessed Error: %s", parent_func, error_msg)
+
+def sm_synchronized(func):
+    """
+    Decorator to synchronize StorageManager methods.
+    Currently a placeholder for future synchronization logic.
+    """
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return func(self, *args, **kwargs)
+
+    return wrapper
+
+class StorageManager:
+    """
+    Main interface for the distributed MP storage manager
+    """
+
+    def __init__(self, config: StorageManagerConfig):
+        # NOTE: Experimental -- use a global lock to simulate "single-threaded" 
+        # behavior. We need to make sure all the functions are non-blocking
+        self._lock = threading.Lock()
+        self._memory_manager = L1MemoryManager(config.l1_memory_manager_config)
+        self._object_manager = L1ObjectManager(config.l1_object_manager_config)
+
+        # Eviction policy
+
+        # Remote backends
+
+        # Monitoring
+
+
+    def reserve(
+        self, 
+        keys: list[ObjectKey], 
+        memory_desc: MemoryLayoutDesc
+    ) -> dict[ObjectKey, ReserveResult]:
+        """
+        Reserve storage for the given object keys non-blockingly.
+
+        By calling this, the caller expresses the willingness to get the ownership
+        of the objects corresponding to the given keys to write to.
+        This function is not guaranteed to return all the keys requested because 
+        some keys may not be "writable" at the moment due to other writers holding
+        the ownership.
+
+        Args:
+            keys (Iterable[ObjectKey]): The object keys to reserve storage for.
+            memory_desc (MemoryLayoutDesc): The memory layout description for the 
+            objects.
+
+        Returns:
+            dict[ObjectKey, ReserveResult]: A dictionary mapping each requested
+            requested key to the ReserveResult. Each ReserveResult contains:
+            - memory_object: The reserved MemoryObj if successful, else None.
+            - success: Whether the reservation was successful.
+            - is_new: Whether the reserved object is newly created or previously 
+                      existing.
+        """
+        # TODO (ApostaC): In the future, the error process code can be drastically
+        # simplified by using a single thread approach
+        ret: dict[ObjectKey, ReserveResult] = {}
+        failed_keys = []
+
+        # Pre-reserve the keys, either SUCCESS or KEYS_ALREADY_EXIST
+        prereserve_res = self._object_manager.prereserve_forced(keys)
+
+        # For new keys: allocate the memory and post_reserve
+        # For KEYS_ALREADY_EXIST keys: try to mark them as reserved
+
+        # Allocate memory for new keys
+        err, allocated_objects = self._memory_manager.allocate(
+                memory_desc, len(prereserve_res.success_keys))
+        if err != L1MemoryManagerError.SUCCESS:
+            # Allocation failed, we need to do clean up:
+            # Free the memory, cacel pre-reserve, mark keys as FAILED
+            if allocated_objects:
+                self._memory_manager.free(allocated_objects),
+
+            maybe_report_error(
+                self._object_manager.cancel_prereserve_forced(
+                    prereserve_res.success_keys),
+                "reserve() --> cancel_prereserve_forced()"
+            )
+
+            failed_keys.extend(prereserve_res.success_keys)
+        else:
+            # Try to post_reserve the keys
+            postreserve_res = self._object_manager.postreserve_must(
+                prereserve_res.success_keys, allocated_objects)
+
+            # Postreserve failed, everything is rolled back
+            if not postreserve_res.is_successful():
+                # Free the memory, cancel pre-reserve, mark keys as FAILED
+                self._memory_manager.free(allocated_objects),
+
+                maybe_report_error(
+                    self._object_manager.cancel_prereserve_forced(
+                        postreserve_res.failed_keys),
+                    "reserve() --> cancel_prereserve_forced()"
+                )
+
+                failed_keys.extend(postreserve_res.failed_keys)
+            else:
+                # Yay, we succeeded for all new keys
+                for key, mem_obj in zip((
+                    prereserve_res.success_keys, 
+                    allocated_objects
+                )):
+                    ret[key] = ReserveResult(
+                        memory_object=mem_obj,
+                        success=True,
+                        is_new=True
+                    )
+
+        # For existing keys, try to mark them as reserved
+        mark_reserve_result, mem_objs = self._object_manager.mark_reserved(
+            prereserve_res.failed_keys,
+            force = True
+        )
+
+        # Process the successful ones and the failed ones
+        # NOTE: the mem_objs correspond to the successful keys only, we skip 
+        # checking whether the length mathces. The mark_reserved() function
+        # guarantees that.
+        for key, mem_obj in zip(
+            mark_reserve_result.success_keys,
+            mem_objs
+        ):
+            ret[key] = ReserveResult(
+                memory_object=mem_obj,
+                success=True,
+                is_new=False
+            )
+
+        for key in mark_reserve_result.failed_keys:
+            failed_keys.append(key)
+
+        # Mark failed keys
+        for key in failed_keys:
+            ret[key] = ReserveResult(
+                memory_object=None,
+                success=False,
+                is_new=False
+            )
+
+        return ret
+
+
+    def commit(
+        self,
+        keys: list[ObjectKey]
+    ) -> None:
+        """
+        Commit the changes made to the objects corresponding to the given keys 
+        non-blockingly.
+
+        By calling this, the caller releases the ownership of the objects and 
+        makes the changes visible to other readers.
+
+        Args:
+            keys (Iterable[ObjectKey]): The object keys to commit changes for.
+        """
+        pass
+
+    @contextmanager
+    def retrieve(
+        self,
+        keys: list[ObjectKey]
+    ) -> Iterator[list[MemoryObj]]:
+        """
+        Retrieve the objects from L1 cache corresponding to the given keys 
+        non-blockingly for read
+
+        Lock and unlock semantics:
+          This function assumes that `submit_prefetch()` was called on the objects
+        and the objects are locked properly.
+          The caller need to call mark_retrieve_finished() after finished processing
+        the retrieved objects to "unlock" the objects.
+
+        Error handling:
+          This function follows "all or nothing" semantics when error happens.
+          If error happens internally during retrieve (i.e., object is not in L1
+        cache), an empty list will be returned. But this function will also do 
+        `unlock` on all the other successfully retrieved objects. Therefore, the
+        caller NEED TO CALL `submit_prefetch()` AGAIN on the failed objects to 
+        ensure proper locking before calling `retrieve()` again.
+          If error happens when the caller is processing the retrieved objects, 
+        this function will handle the unlock internally when exiting the context.
+
+        Example Usage:
+        ```python
+        with storage_manager.retrieve(keys) as objects:
+            for obj in objects:
+                # process obj
+                ...
+
+        # After processing is finished
+        storage_manager.mark_retrieve_finished(keys)
+        ```
+
+        Args:
+            keys (Iterable[ObjectKey]): The object keys to retrieve.
+
+        Yields:
+            list[MemoryObj]: A list of MemoryObj or None for each requested
+            key. Guaranteed to have the same length as the input keys. If any 
+            object is not found in L1 cache, an empty list is yielded.
+        """
+        pass
+
+    def mark_retrieve_finished(
+        self,
+        keys: list[ObjectKey]
+    ) -> None:
+        """
+        Mark the retrieve operation as finished for the given object keys
+        non-blockingly.
+
+        This function unlocks the objects that were previously locked by 
+        `submit_prefetch()`.
+
+        Args:
+            keys (Iterable[ObjectKey]): The object keys to mark as finished.
+        """
+        pass
+
+    def submit_prefetch(
+        self,
+        keys: list[ObjectKey]
+    ) -> PrefetchHandle:
+        """
+        Submit a prefetch task for the given object keys non-blockingly.
+
+        Once the prefetch is finished, the objects will be available in 
+        L1 cache and be locked.
+
+        Args:
+            keys (Iterable[ObjectKey]): The object keys to prefetch.
+
+        Returns:
+            PrefetchHandle: A handle to track the prefetch operation.
+        """
+        pass
+
+    def query_prefetch_status(
+        self,
+        handle: PrefetchHandle
+    ) -> int:
+        """
+        TODO: write the description of this function
+        """
+        pass
+
+    def lookup_local(
+        self,
+        keys: list[ObjectKey]
+    ) -> int:
+        """
+        Lookup the local L1 for the given object keys non-blockingly.
+
+        This function does prefix lookup. It does NOT lock the objects.
+
+        Args:
+            keys (Iterable[ObjectKey]): The object keys to lookup.
+
+        Returns:
+            The number of keys found in the local L1 cache.
+        """
+        pass
+
+    def delete(
+        self,
+        keys: list[ObjectKey]
+    ) -> None:
+        """
+        Delete the objects corresponding to the given keys non-blockingly.
+
+        Args:
+            keys (Iterable[ObjectKey]): The object keys to delete.
+        """
+        pass

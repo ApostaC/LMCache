@@ -535,3 +535,48 @@ class TestErrorCodeSemantics:
     def test_error_codes_are_distinct(self):
         """Test that error codes are distinct values."""
         assert L1MemoryManagerError.SUCCESS != L1MemoryManagerError.OUT_OF_MEMORY
+
+
+# =============================================================================
+# Tests for L1MemoryManager.get_memory_usage()
+# =============================================================================
+
+
+class TestGetMemoryUsage:
+    """
+    Tests for L1MemoryManager.get_memory_usage() method.
+    """
+
+    def test_get_memory_usage_initial(self, basic_config):
+        """Test that get_memory_usage returns correct initial values."""
+        manager = L1MemoryManager(basic_config)
+
+        used, total = manager.get_memory_usage()
+
+        # Initial usage should be 0 because nothing allocated
+        assert used == 0
+        # Total should match (or exceed) configured size
+        assert total >= basic_config.size_in_bytes
+
+        manager.close()
+
+    def test_get_memory_usage_after_allocation(self, basic_config, basic_layout):
+        """Test that get_memory_usage increases after allocation."""
+        manager = L1MemoryManager(basic_config)
+
+        used_initial, _ = manager.get_memory_usage()
+        assert used_initial == 0
+
+        # Allocate one batch
+        error, mem_objs = manager.allocate(basic_layout, count=1)
+        assert error == L1MemoryManagerError.SUCCESS
+
+        used_after, total_after = manager.get_memory_usage()
+
+        assert used_after > used_initial
+        # Check that used memory is consistent with allocation
+        # Note: exact match might depend on alignment and allocator details,
+        # so just checking it increased is safer for a quick test.
+        assert used_after > 0
+
+        manager.close()

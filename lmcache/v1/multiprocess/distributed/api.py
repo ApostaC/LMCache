@@ -12,6 +12,9 @@ from dataclasses import dataclass
 # Third Party
 import torch
 
+# First Party
+from lmcache.v1.memory_management import MemoryObj
+
 
 @dataclass(frozen=True)
 class ObjectKey:
@@ -43,3 +46,28 @@ class MemoryLayoutDesc:
             raise ValueError(
                 "MemoryLayoutDesc: shapes and dtype must have the same length"
             )
+
+
+@dataclass(frozen=True)
+class ReserveResult:
+    """
+    Result of a reserve operation for a given key
+    """
+
+    memory_object: MemoryObj | None
+    """ The reserved memory object """
+
+    success: bool
+    """ Whether the reservation was successful """
+
+    is_new: bool
+    """ Whether the reserved object is newly created """
+
+
+@dataclass(frozen=True)
+class PrefetchHandle:
+    """
+    TODO: think about what to put here
+    """
+
+    pass

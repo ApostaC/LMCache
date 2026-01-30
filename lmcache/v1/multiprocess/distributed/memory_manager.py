@@ -97,6 +97,35 @@ class L1MemoryManager:
         self._allocator.batched_free(mem_objs)
         return L1MemoryManagerError.SUCCESS
 
+    def get_memory_usage(self) -> tuple[int, int]:
+        """
+        Get the current memory usage. This function will mainly be used to support
+        eviction decision.
+
+        Returns:
+            tuple[int, int]: A tuple containing used memory in bytes and total memory
+            in bytes.
+
+        Note:
+            In the future, we may want to make a "callback" based mechanism to
+            trigger eviction when the memory usage reaches a watermark.
+        """
+
+        # HACK: now trying to read this from the address manager in a ad-hoc
+        # manner
+        def get_address_manager(allocator: MemoryAllocatorInterface):
+            if isinstance(allocator, MixedMemoryAllocator):
+                return allocator.pin_allocator.address_manager
+            elif isinstance(allocator, LazyMemoryAllocator):
+                return allocator._allocator.address_manager
+            else:
+                raise NotImplementedError(
+                    "get_memory_usage is not implemented for this allocator type."
+                )
+
+        am = get_address_manager(self._allocator)
+        return am.total_allocated_size, am.get_heap_size()
+
     def get_vm_space(self) -> torch.Tensor:
         """
         Used by RDMA communication to get the underlying virtual memory space.

@@ -34,3 +34,18 @@ class L1ObjectManagerConfig:
     """
 
     lock_ttl_seconds: int = field(default=300)
+
+
+@dataclass
+class StorageManagerConfig:
+    """
+    The configuration for the distributed storage manager.
+    """
+
+    l1_memory_manager_config: L1MemoryManagerConfig
+    """ The configuration for L1 memory manager. """
+
+    l1_object_manager_config: L1ObjectManagerConfig = field(
+        default_factory=L1ObjectManagerConfig
+    )
+    """ The configuration for L1 object manager. """

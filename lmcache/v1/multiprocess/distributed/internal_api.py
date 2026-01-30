@@ -5,12 +5,14 @@ Class for distributed storage manager internal API data structures
 
 # Standard
 from dataclasses import dataclass, field
+import enum
 
 # First Party
 from lmcache.v1.multiprocess.distributed.api import ObjectKey
 from lmcache.v1.multiprocess.distributed.error import L1ObjectManagerError
 
 
+# For L1ObjectManager operations
 @dataclass
 class L1OperationResult:
     """
@@ -54,3 +56,29 @@ class L1OperationResult:
     def is_successful(self) -> bool:
         """Returns True if the operation was successful, False otherwise."""
         return self.error == L1ObjectManagerError.SUCCESS
+
+
+# For Eviction
+class EvictionDestination(enum.Enum):
+    """
+    The destination of evicted objects
+    """
+
+    DISCARD = enum.auto()
+    """Discard the evicted objects"""
+
+    L2_CACHE = enum.auto()
+    """Evict to L2 storage"""
+
+
+@dataclass(frozen=True)
+class EvictionAction:
+    """
+    An action to be taken for eviction
+    """
+
+    destination: EvictionDestination
+    """The destination of the evicted object"""
+
+    keys: list[ObjectKey] = field(default_factory=list)
+    """The key of the object to be evicted"""

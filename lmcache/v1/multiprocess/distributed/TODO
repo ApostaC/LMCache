@@ -1,0 +1,15 @@
+ObjectManager -- DONE 
+- implementation
+- unit tests
+
+New storage manager
+- interface
+- eviction
+ - eviction policy -- DONE
+ - memory watermarking
+ - eviction thread
+
+Observability
+
+Remote module
+

@@ -76,6 +76,21 @@ class L1ObjectManagerError(enum.IntFlag):
 ErrorType = Union[L1MemoryManagerError, L1ObjectManagerError]
 
 
+def is_successful(error: ErrorType) -> bool:
+    """Check if the error code indicates success.
+
+    Args:
+        error (ErrorType): The error code.
+    Returns:
+        bool: True if the operation was successful, False otherwise.
+    """
+    if isinstance(error, L1MemoryManagerError):
+        return error == L1MemoryManagerError.SUCCESS
+    elif isinstance(error, L1ObjectManagerError):
+        return error == L1ObjectManagerError.SUCCESS
+    return False
+
+
 def strerror(error: ErrorType) -> str:
     """Convert error code to human-readable string.
 
@@ -118,4 +133,4 @@ def strerror(error: ErrorType) -> str:
         if error_messages:
             return "; ".join(error_messages) + "."
 
-    return "Unknown error."
+    return "Unknown error: " + str(error)

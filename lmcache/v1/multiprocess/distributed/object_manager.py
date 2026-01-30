@@ -349,7 +349,7 @@ class L1ObjectManager:
         self,
         keys: Iterable[ObjectKey],
         force: bool,
-    ) -> L1OperationResult:
+    ) -> tuple[L1OperationResult, list[MemoryObj]]:
         """
         Change the existing "committed" keys as "reserved". The input keys
         are expected to be "committed" and "unlocked" and not "temporary".
@@ -366,6 +366,8 @@ class L1ObjectManager:
 
         Args:
             keys: The keys to mark as "reserved".
+            force: Use "FORCED" error handling semantics if True. Otherwise, use
+                   "ALL OR NOTHING" semantics.
 
         Returns:
             L1OperationResult with:
@@ -373,9 +375,11 @@ class L1ObjectManager:
               KEYS_NOT_COMMITTED if some keys are not committed,
               KEYS_ALREADY_LOCKED if some keys are locked.
               KEYS_ARE_TEMPORARY if some keys are temporary.
+              ENTRY_IS_EMPTY if the memory object is empty
             - success_keys: Keys that were successfully marked as reserved.
             - failed_keys: Keys that failed to be marked.
             - failed_reasons: Per-key error codes for failed keys.
+            List of MemoryObj associated with the successfully marked keys.
 
         Note:
             We don't support `FORCE` semantics here because the caller should never
@@ -383,6 +387,7 @@ class L1ObjectManager:
             key)
         """
         result = L1OperationResult()
+        success_objs: list[MemoryObj] = []
 
         with self._committed_lock, self._reserved_lock:
             for key in keys:
@@ -408,10 +413,18 @@ class L1ObjectManager:
                     else:
                         break
 
+                if entry.memory_obj is None:
+                    result.add_error(key, L1ObjectManagerError.ENTRY_IS_EMPTY)
+                    if force:
+                        continue
+                    else:
+                        break
+
                 # Move the entry from committed to reserved
-                entry = self._committed.pop(key)
                 entry.mark_as_reserved()
                 self._reserved[key] = entry
+                self._committed.pop(key)
+                success_objs.append(entry.memory_obj)
                 result.add_success(key)
 
             if not result.is_successful() and not force:
@@ -420,6 +433,7 @@ class L1ObjectManager:
                     entry = self._reserved.pop(key)
                     entry.mark_as_committed()
                     self._committed[key] = entry
+                success_objs.clear()
 
         if not result.is_successful() and not force:
             # Mark the remaining keys as skipped
@@ -428,7 +442,7 @@ class L1ObjectManager:
             for key in list(keys)[num_processed:]:
                 result.add_skipped(key)
 
-        return result
+        return result, success_objs
 
     def commit(self, keys: Iterable[ObjectKey], force: bool) -> L1OperationResult:
         """

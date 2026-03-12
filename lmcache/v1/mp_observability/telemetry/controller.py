@@ -21,6 +21,10 @@ from lmcache.v1.mp_observability.telemetry.processors.logging_processor import (
     LoggingProcessor,
     LoggingProcessorConfig,
 )
+from lmcache.v1.mp_observability.telemetry.processors.store_event_exporter import (
+    StoreEventExporter,
+    StoreEventExporterConfig,
+)
 
 logger = init_logger(__name__)
 
@@ -166,6 +170,8 @@ def create_processors(config: TelemetryConfig) -> list[TelemetryProcessor]:
     for proc_config in config.processor_configs:
         if isinstance(proc_config, LoggingProcessorConfig):
             processors.append(LoggingProcessor(proc_config))
+        elif isinstance(proc_config, StoreEventExporterConfig):
+            processors.append(StoreEventExporter(proc_config))
         else:
             raise ValueError(
                 f"Unknown telemetry processor config type: "

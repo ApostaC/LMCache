@@ -331,6 +331,9 @@ class MPCacheEngine:
                         "store",
                         key.request_id,
                         device=str(gpu_context.device),
+                        model_name=key.model_name,
+                        world_size=key.world_size,
+                        kv_rank=key.worker_id,
                     ),
                 )
 
@@ -381,6 +384,9 @@ class MPCacheEngine:
                     key.request_id,
                     stored_count=len(reserved_dict),
                     device=str(gpu_context.device),
+                    model_name=key.model_name,
+                    world_size=key.world_size,
+                    kv_rank=key.worker_id,
                 ),
             )
 
@@ -443,6 +449,9 @@ class MPCacheEngine:
                     "retrieve",
                     key.request_id,
                     device=str(gpu_context.device),
+                    model_name=key.model_name,
+                    world_size=key.world_size,
+                    kv_rank=key.worker_id,
                 ),
             )
 
@@ -519,6 +528,9 @@ class MPCacheEngine:
                             key.request_id,
                             retrieved_count=len(prefetched_keys),
                             device=str(gpu_context.device),
+                            model_name=key.model_name,
+                            world_size=key.world_size,
+                            kv_rank=key.worker_id,
                         ),
                     )
 

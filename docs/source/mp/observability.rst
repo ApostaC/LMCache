@@ -163,6 +163,25 @@ Sample output:
     LMCache DEBUG: Telemetry: lookup START session=req-001 ts=12345.678 metadata={}
     LMCache DEBUG: Telemetry: lookup END session=req-001 ts=12345.680 metadata={'found_count': 3}
 
+**Built-in: ``store_exporter`` processor**
+
+Exports store-finished events to a FastAPI endpoint for prefill-decode (PD)
+disaggregation orchestration.  When the LMCache server finishes a ``store``
+operation, this processor sends an HTTP POST to the configured endpoint so the
+orchestrator (e.g. a proxy/router) knows when KV caches are ready for the
+decode instance.
+
+.. code-block:: bash
+
+    --telemetry-processor '{"type": "store_exporter", "endpoint": "http://localhost:5768/api/v1/telemetry"}'
+
+This replaces the previous approach of setting ``LMCACHE_REQUEST_TELEMETRY_TYPE``
+and ``LMCACHE_REQUEST_TELEMETRY_ENDPOINT`` environment variables on the vLLM
+side.  The telemetry is now configured entirely on the LMCache server.
+
+See the :doc:`PD disaggregation example </examples/disagg_prefill_mp/README>`
+and ``examples/disagg_prefill_mp/`` for a complete working setup.
+
 Configuration
 ~~~~~~~~~~~~~
 

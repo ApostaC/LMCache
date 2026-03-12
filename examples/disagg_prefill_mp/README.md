@@ -7,7 +7,7 @@ The figure above shows the PD architecture. The workflow goes as:
 
 - The router sends one request to prefill instance with `max_token=1` and then wait for an event.
 - The prefill instance finishes storing all the KV caches.
-- The `request_telemetry` class reports the finished store event back to the router
+- The LMCache server's `store_exporter` telemetry processor reports the finished store event back to the router.
 - The router then send the request to decode instance.
 
 
@@ -19,14 +19,17 @@ The figure above shows the PD architecture. The workflow goes as:
 Launch the following in 4 different terminal windows
 
 ```bash
-# LMCache multi-process server
-python3 -m lmcache.v1.multiprocess.server --l1-size-gb 100 --eviction-policy LRU
+# LMCache multi-process server (with store_exporter telemetry processor)
+python3 -m lmcache.v1.multiprocess.server \
+    --l1-size-gb 100 --eviction-policy LRU \
+    --enable-telemetry \
+    --telemetry-processor '{"type": "store_exporter", "endpoint": "http://localhost:5768/api/v1/telemetry"}'
 # Prefill instance, enforce_eager for faster startup
-LMCACHE_REQUEST_TELEMETRY_TYPE=fastapi LMCACHE_REQUEST_TELEMETRY_ENDPOINT=http://localhost:5768/api/v1/telemetry vllm serve Qwen/Qwen3-14B --kv-transfer-config '{"kv_connector":"LMCacheMPConnector", "kv_role":"kv_both"}' --gpu-memory-utilization 0.7 --no-enable-prefix-caching --enforce-eager --port 8100
+vllm serve Qwen/Qwen3-14B --kv-transfer-config '{"kv_connector":"LMCacheMPConnector", "kv_role":"kv_both"}' --gpu-memory-utilization 0.7 --no-enable-prefix-caching --enforce-eager --port 8100
 # Decode instance, enforce_eager for faster startup
 CUDA_VISIBLE_DEVICES=1 vllm serve Qwen/Qwen3-14B --kv-transfer-config '{"kv_connector":"LMCacheMPConnector", "kv_role":"kv_both"}' --gpu-memory-utilization 0.7 --no-enable-prefix-caching --enforce-eager --port 8200
 # proxy server
-python disagg_proxy_server
+python disagg_proxy_server.py
 ```
 
 And then you can test the implementation with example curl request

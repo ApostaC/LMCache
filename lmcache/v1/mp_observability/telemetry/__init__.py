@@ -29,6 +29,9 @@ from lmcache.v1.mp_observability.telemetry.processors.base import (
 from lmcache.v1.mp_observability.telemetry.processors.logging_processor import (
     LoggingProcessorConfig,
 )
+from lmcache.v1.mp_observability.telemetry.processors.store_event_exporter import (
+    StoreEventExporterConfig,
+)
 
 __all__ = [
     "EventType",
@@ -37,6 +40,7 @@ __all__ = [
     "TelemetryProcessorConfig",
     "TelemetryConfig",
     "LoggingProcessorConfig",
+    "StoreEventExporterConfig",
     "init_telemetry_controller",
     "get_telemetry_controller",
     "log_telemetry",

@@ -242,7 +242,7 @@ Source: ``lmcache/v1/mp_observability/telemetry/config.py``
 ``logging`` processor
 ~~~~~~~~~~~~~~~~~~~~~
 
-The built-in processor.  Logs telemetry events via LMCache's logger.
+Logs telemetry events via LMCache's logger.
 
 Fields:
 
@@ -255,6 +255,28 @@ Examples:
 
     --telemetry-processor '{"type": "logging", "log_level": "DEBUG"}'
     --telemetry-processor '{"type": "logging", "log_level": "INFO"}'
+
+``store_exporter`` processor
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Exports store-finished events to a FastAPI endpoint for PD (prefill-decode)
+disaggregation orchestration.  Watches for ``store`` END telemetry events and
+forwards them as HTTP POST requests.
+
+Fields:
+
+- ``endpoint`` *(required)*: The FastAPI endpoint URL to send store-finished
+  events to.
+- ``timeout``: Timeout in seconds for HTTP requests.  Default is ``5.0``.
+- ``export_workers``: Maximum number of threads for async HTTP requests.
+  Default is ``2``.
+
+Examples:
+
+.. code-block:: bash
+
+    --telemetry-processor '{"type": "store_exporter", "endpoint": "http://localhost:5768/api/v1/telemetry"}'
+    --telemetry-processor '{"type": "store_exporter", "endpoint": "http://router:5768/api/v1/telemetry", "timeout": 10.0, "export_workers": 4}'
 
 vLLM Client Configuration
 --------------------------

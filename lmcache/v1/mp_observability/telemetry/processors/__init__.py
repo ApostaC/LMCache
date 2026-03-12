@@ -10,6 +10,7 @@ Re-exports base classes for convenience.
 # Import submodules to trigger registration
 from lmcache.v1.mp_observability.telemetry.processors import (  # noqa: F401
     logging_processor,
+    store_event_exporter,
 )
 from lmcache.v1.mp_observability.telemetry.processors.base import (
     TelemetryProcessor,

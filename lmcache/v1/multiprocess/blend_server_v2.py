@@ -73,6 +73,9 @@ from lmcache.v1.mp_observability.telemetry import (
     TelemetryConfig,
     get_telemetry_controller,
     init_telemetry_controller,
+    log_telemetry,
+    make_end_event,
+    make_start_event,
     parse_args_to_telemetry_config,
 )
 from lmcache.v1.mp_observability.telemetry.config import (
@@ -714,9 +717,36 @@ class BlendEngineV2(MPCacheEngine):
         )
         gpu_context = self._cb_gpu_contexts[instance_id]
 
+        if get_telemetry_controller().is_enabled():
+            gpu_context.cupy_stream.launch_host_func(
+                log_telemetry,
+                make_start_event(
+                    "store",
+                    key.request_id,
+                    device=str(gpu_context.device),
+                    model_name=key.model_name,
+                    world_size=key.world_size,
+                    kv_rank=key.worker_id,
+                ),
+            )
+
         event, reserved_dict = self._cb_store_gpu_copy(
             obj_keys, gpu_context, offset, event_ipc_handle
         )
+
+        if get_telemetry_controller().is_enabled():
+            gpu_context.cupy_stream.launch_host_func(
+                log_telemetry,
+                make_end_event(
+                    "store",
+                    key.request_id,
+                    stored_count=len(reserved_dict),
+                    device=str(gpu_context.device),
+                    model_name=key.model_name,
+                    world_size=key.world_size,
+                    kv_rank=key.worker_id,
+                ),
+            )
 
         logger.info(
             "Stored final doc with %d tokens, num stored chunks: %d",

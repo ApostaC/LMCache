@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 # Standard
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 import os
@@ -471,8 +472,6 @@ class LMCacheMPWorkerAdapter:
         # Registered kv caches from vLLM
         self.kv_caches: dict[str, torch.Tensor] = {}
 
-        # Request futures
-        self.store_futures: dict[str, MessagingFuture[StoreResult]] = {}
         # request_id -> (future, block_ids)
         self.retrieve_futures: dict[
             str, tuple[MessagingFuture[RetrieveResult], list[int]]
@@ -480,12 +479,6 @@ class LMCacheMPWorkerAdapter:
 
         # Block IDs that failed due to retrieve timeout
         self.error_block_ids: set[int] = set()
-
-        # The store requests that have finished execution in LMCache
-        self.finished_stores: set[str] = set()
-        # The finished request ids that are passed via vLLM and also
-        # have corresponding store requests submitted to LMCache before
-        self.previously_finished: set[str] = set()
 
         self.model_name = model_name
         self.world_size = world_size
@@ -528,6 +521,11 @@ class LMCacheMPWorkerAdapter:
                     "http://localhost:5768/api/v1/telemetry",
                 ),
             },
+        )
+
+        # Store operation manager (handles store futures, dedup, and telemetry)
+        self._store_manager = _StoreOperationManager(
+            telemetry_report_callback=self._report_store_telemetry,
         )
 
     @property
@@ -587,7 +585,7 @@ class LMCacheMPWorkerAdapter:
             RequestType.STORE,
             [key, self.instance_id, op.block_ids, event.ipc_handle()],
         ).to_cuda_future()
-        self.store_futures[request_id] = future
+        self._store_manager.on_new_store_request(request_id, future)
 
     @_lmcache_nvtx_annotate
     def submit_retrieve_request(
@@ -661,22 +659,6 @@ class LMCacheMPWorkerAdapter:
         for request_id, op in zip(request_ids, ops, strict=False):
             self.submit_retrieve_request(request_id, op, event)
 
-    def _process_finished_stores(
-        self,
-        finished_req_ids_from_lmcache: set[str],
-        finished_req_ids_from_engine: set[str],
-    ) -> set[str]:
-        """Merge LMCache-side and engine-side finished store info."""
-        self.finished_stores.update(finished_req_ids_from_lmcache)
-        ret_stores = set()
-        for req_id in finished_req_ids_from_engine:
-            if req_id in self.finished_stores or req_id in self.store_futures:
-                self.previously_finished.add(req_id)
-            else:
-                ret_stores.add(req_id)
-        ret_stores.update(self._update_and_get_finished_store())
-        return ret_stores
-
     @_lmcache_nvtx_annotate
     def get_finished(
         self, finished_req_ids_from_engine: set[str]
@@ -701,9 +683,12 @@ class LMCacheMPWorkerAdapter:
             take care of deduplicating the request IDs and only return the request
             IDs that have not been returned before.
         """
+        # Feed engine-finished request ids to the store manager
+        self._store_manager.on_vllm_request_finished(finished_req_ids_from_engine)
+
         # If unhealthy, drain all pending futures immediately
         if not self.is_healthy:
-            finished_stores = set(self.store_futures.keys())
+            self._store_manager.drain_all()
             finished_retrieves = set()
             for request_id, (
                 _r_future,
@@ -711,30 +696,13 @@ class LMCacheMPWorkerAdapter:
             ) in self.retrieve_futures.items():
                 finished_retrieves.add(request_id)
                 self.error_block_ids.update(r_block_ids)
-            self.store_futures.clear()
             self.retrieve_futures.clear()
 
-            ret_stores = self._process_finished_stores(
-                finished_stores, finished_req_ids_from_engine
-            )
+            ret_stores = self._store_manager.get_finished_stores()
             return ret_stores, finished_retrieves
 
-        finished_stores = set()
+        # Check retrieve futures
         finished_retrieves = set()
-        for request_id, s_future in self.store_futures.items():
-            if not s_future.query():
-                continue
-
-            s_result = s_future.result()
-            finished_stores.add(request_id)
-
-            if not s_result:
-                logger.error(
-                    "Something went wrong when processing the "
-                    "store request for request_id=%s",
-                    request_id,
-                )
-
         for request_id, (r_future, _) in self.retrieve_futures.items():
             if not r_future.query():
                 continue
@@ -750,27 +718,10 @@ class LMCacheMPWorkerAdapter:
                     r_result,
                 )
 
-        # Remove the finished requests from the tracking dicts
-        for request_id in finished_stores:
-            self.store_futures.pop(request_id, None)
         for request_id in finished_retrieves:
             self.retrieve_futures.pop(request_id, None)
 
-        # Update the internal states
-        ret_stores = self._process_finished_stores(
-            finished_stores, finished_req_ids_from_engine
-        )
-
-        # the invocation of `get_finished` means that
-        # these requests' KV caches are already fully stored.
-        # or the requests normally ends without any store.
-        if ret_stores:
-            self.request_telemetry.on_request_store_finished(
-                request_ids_set=ret_stores,
-                model_name=self.model_name,
-                world_size=self.world_size,
-                kv_rank=self.worker_id,
-            )
+        ret_stores = self._store_manager.get_finished_stores()
 
         return ret_stores, finished_retrieves
 
@@ -794,6 +745,8 @@ class LMCacheMPWorkerAdapter:
         """
         Shutdown the LMCache MP worker adapter
         """
+        self._store_manager.shutdown()
+
         logger.info("Unregistering kv caches")
         try:
             send_lmcache_request(
@@ -812,17 +765,14 @@ class LMCacheMPWorkerAdapter:
         self.request_telemetry.close()
 
     # Helper functions
-    def _update_and_get_finished_store(
-        self,
-    ) -> set[str]:
-        """Converge the internal states about finished stores
-        and returns the 'safe finished store request ids' back
-        """
-        safe_finished_s = self.finished_stores.intersection(self.previously_finished)
-        self.finished_stores.difference_update(self.previously_finished)
-        self.previously_finished.difference_update(safe_finished_s)
-
-        return safe_finished_s
+    def _report_store_telemetry(self, request_ids_set: set[str]) -> None:
+        """Callback for _StoreOperationManager to report store telemetry."""
+        self.request_telemetry.on_request_store_finished(
+            request_ids_set=request_ids_set,
+            model_name=self.model_name,
+            world_size=self.world_size,
+            kv_rank=self.worker_id,
+        )
 
     def _create_key(
         self,
@@ -841,3 +791,121 @@ class LMCacheMPWorkerAdapter:
             end=end,
             request_id=request_id,
         )
+
+
+# Helper class that is used by the public modules
+
+
+class _StoreOperationManager:
+    """Manages store request lifecycle for LMCacheMPWorkerAdapter.
+
+    Responsibilities:
+    1. Poll store futures for completion
+    2. Determine which request IDs are safe to release GPU KV cache
+    3. Report store-finished telemetry
+
+    All methods are called from the main thread only (no locks needed).
+    """
+
+    def __init__(
+        self,
+        telemetry_report_callback: Callable[[set[str]], None],
+    ):
+        """
+        Args:
+            telemetry_report_callback: The callback function to report the
+                finished store request ids to the telemetry server. The
+                callback function should take a set of request ids as input.
+        """
+        # Pending store futures (request_id -> future).
+        # A request ID present here means its store is still in-flight.
+        # Once a future completes and is polled, it is removed. Its absence
+        # means "store done or never submitted."
+        self._store_futures: dict[str, MessagingFuture[StoreResult]] = {}
+
+        # vLLM-reported finished request IDs not yet returned by
+        # get_finished_stores(). Consumed entries are removed to prevent
+        # duplicate returns.
+        self._vllm_reported_finished: set[str] = set()
+
+        self._telemetry_report_callback = telemetry_report_callback
+
+    def on_vllm_request_finished(
+        self,
+        finished_req_ids_from_engine: set[str],
+    ) -> None:
+        """Record request IDs that vLLM reports as finished.
+
+        Args:
+            finished_req_ids_from_engine: the set of request ids that are
+                reported as finished from the vLLM engine side.
+        """
+        self._vllm_reported_finished.update(finished_req_ids_from_engine)
+
+    def on_new_store_request(
+        self,
+        request_id: str,
+        future: MessagingFuture[StoreResult],
+    ) -> None:
+        """Track a newly submitted store request.
+
+        Args:
+            request_id: the ID of the store request
+            future: the future of the store request
+        """
+        self._store_futures[request_id] = future
+
+    def get_finished_stores(self) -> set[str]:
+        """Get the request ids that are "safe to release the GPU KV cache".
+
+        A request ID is safe to release when:
+        1. It has been reported as finished by vLLM, AND
+        2. It has no pending store future (either the store completed
+           or no store was ever submitted).
+
+        Returns:
+            A set of request ids that are safe to release the GPU KV cache.
+        """
+        # Poll store futures for completion
+        finished = set()
+        for req_id, future in self._store_futures.items():
+            if not future.query():
+                continue
+            result = future.result()
+            finished.add(req_id)
+            if not result:
+                logger.error(
+                    "Something went wrong when processing the "
+                    "store request for request_id=%s",
+                    req_id,
+                )
+        for req_id in finished:
+            del self._store_futures[req_id]
+
+        # Determine safe-to-release request IDs
+        final: set[str] = set()
+        still_pending: set[str] = set()
+        for req_id in self._vllm_reported_finished:
+            if req_id in self._store_futures:
+                still_pending.add(req_id)
+            else:
+                final.add(req_id)
+        self._vllm_reported_finished = still_pending
+
+        # Report telemetry
+        if final:
+            self._telemetry_report_callback(final)
+
+        return final
+
+    def drain_all(self) -> None:
+        """Mark all pending store futures as finished without waiting.
+
+        Called when the server is unhealthy to immediately release all
+        pending store requests. The drained request ids will be visible
+        to the next ``get_finished_stores`` call.
+        """
+        self._store_futures.clear()
+
+    def shutdown(self) -> None:
+        """Clean up resources. No-op for the single-threaded version."""

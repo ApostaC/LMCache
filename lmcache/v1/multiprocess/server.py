@@ -145,6 +145,7 @@ class _PrefetchJob:
     handle: PrefetchHandle
     world_size: int
     request_id: str
+    token_ids: tuple[int, ...] = ()
 
 
 # Main class for the mp cache engine
@@ -297,7 +298,11 @@ class MPCacheEngine:
                 Event(
                     event_type=EventType.MP_STORE_START,
                     session_id=key.request_id,
-                    metadata={"device": str(gpu_context.device)},
+                    metadata={
+                        "device": str(gpu_context.device),
+                        "num_tokens": key.end - key.start,
+                        "token_ids": list(key.token_ids[key.start : key.end]),
+                    },
                 ),
             )
 
@@ -351,6 +356,8 @@ class MPCacheEngine:
                 metadata={
                     "stored_count": len(reserved_dict),
                     "device": str(gpu_context.device),
+                    "num_tokens": key.end - key.start,
+                    "token_ids": list(key.token_ids[key.start : key.end]),
                 },
             ),
         )
@@ -413,7 +420,11 @@ class MPCacheEngine:
             Event(
                 event_type=EventType.MP_RETRIEVE_START,
                 session_id=key.request_id,
-                metadata={"device": str(gpu_context.device)},
+                metadata={
+                    "device": str(gpu_context.device),
+                    "num_tokens": key.end - key.start,
+                    "token_ids": list(key.token_ids[key.start : key.end]),
+                },
             ),
         )
 
@@ -521,6 +532,8 @@ class MPCacheEngine:
                         metadata={
                             "retrieved_count": len(prefetched_keys),
                             "device": str(gpu_context.device),
+                            "num_tokens": key.end - key.start,
+                            "token_ids": list(key.token_ids[key.start : key.end]),
                         },
                     ),
                 )
@@ -575,6 +588,10 @@ class MPCacheEngine:
             Event(
                 event_type=EventType.MP_LOOKUP_PREFETCH_START,
                 session_id=key.request_id,
+                metadata={
+                    "num_tokens": len(key.token_ids),
+                    "token_ids": list(key.token_ids),
+                },
             )
         )
 
@@ -596,6 +613,7 @@ class MPCacheEngine:
                     ),
                     world_size=1,
                     request_id=key.request_id,
+                    token_ids=key.token_ids,
                 )
             )
 
@@ -615,6 +633,7 @@ class MPCacheEngine:
                     ),
                     world_size=1,
                     request_id=key.request_id,
+                    token_ids=key.token_ids,
                 )
             )
         obj_keys = ipc_key_to_object_keys(key, chunk_hashes)
@@ -630,6 +649,7 @@ class MPCacheEngine:
                 handle=handle,
                 world_size=key.world_size,
                 request_id=key.request_id,
+                token_ids=key.token_ids,
             )
         )
 
@@ -706,11 +726,21 @@ class MPCacheEngine:
         #    first failure
         found_count = found_count // job.world_size
 
+        l1_hit_chunks = job.handle.l1_prefix_hit_count // job.world_size
+        l2_hit_chunks = found_count - l1_hit_chunks
         self._event_bus.publish(
             Event(
                 event_type=EventType.MP_LOOKUP_PREFETCH_END,
                 session_id=job.request_id,
-                metadata={"found_count": found_count},
+                metadata={
+                    "found_count": found_count,
+                    "num_tokens": job.handle.total_requested_keys
+                    * self.chunk_size
+                    // job.world_size,
+                    "l1_hit_chunks": l1_hit_chunks,
+                    "l2_hit_chunks": l2_hit_chunks,
+                    "token_ids": list(job.token_ids),
+                },
             )
         )
 

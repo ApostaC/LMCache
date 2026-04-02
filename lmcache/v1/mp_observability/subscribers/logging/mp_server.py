@@ -34,43 +34,52 @@ class MPServerLoggingSubscriber(EventSubscriber):
 
     def _on_store_start(self, event: Event) -> None:
         logger.debug(
-            "MP store start: session=%s device=%s",
+            "MP store start: session=%s device=%s num_tokens=%s",
             event.session_id,
             event.metadata.get("device"),
+            event.metadata.get("num_tokens"),
         )
 
     def _on_store_end(self, event: Event) -> None:
         logger.debug(
-            "MP store end: session=%s device=%s stored_count=%s",
+            "MP store end: session=%s device=%s stored_count=%s num_tokens=%s",
             event.session_id,
             event.metadata.get("device"),
             event.metadata.get("stored_count"),
+            event.metadata.get("num_tokens"),
         )
 
     def _on_retrieve_start(self, event: Event) -> None:
         logger.debug(
-            "MP retrieve start: session=%s device=%s",
+            "MP retrieve start: session=%s device=%s num_tokens=%s",
             event.session_id,
             event.metadata.get("device"),
+            event.metadata.get("num_tokens"),
         )
 
     def _on_retrieve_end(self, event: Event) -> None:
         logger.debug(
-            "MP retrieve end: session=%s device=%s retrieved_count=%s",
+            "MP retrieve end: session=%s device=%s retrieved_count=%s num_tokens=%s",
             event.session_id,
             event.metadata.get("device"),
             event.metadata.get("retrieved_count"),
+            event.metadata.get("num_tokens"),
         )
 
     def _on_lookup_prefetch_start(self, event: Event) -> None:
         logger.debug(
-            "MP lookup/prefetch start: session=%s",
+            "MP lookup/prefetch start: session=%s num_tokens=%s",
             event.session_id,
+            event.metadata.get("num_tokens"),
         )
 
     def _on_lookup_prefetch_end(self, event: Event) -> None:
         logger.debug(
-            "MP lookup/prefetch end: session=%s found_count=%s",
+            "MP lookup/prefetch end: session=%s found_count=%s "
+            "num_tokens=%s l1_hit_chunks=%s l2_hit_chunks=%s",
             event.session_id,
             event.metadata.get("found_count"),
+            event.metadata.get("num_tokens"),
+            event.metadata.get("l1_hit_chunks"),
+            event.metadata.get("l2_hit_chunks"),
         )

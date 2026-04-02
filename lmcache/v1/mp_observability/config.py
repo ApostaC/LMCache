@@ -49,6 +49,11 @@ class ObservabilityConfig:
     """Port for the Prometheus /metrics endpoint.  Only used when
     ``otlp_endpoint`` is ``None`` (Prometheus pull fallback)."""
 
+    csv_output_path: str | None = None
+    """Path to a CSV file for event output.  When set, a
+    ``CSVWriterSubscriber`` is registered to periodically flush events
+    to this file."""
+
 
 DEFAULT_OBSERVABILITY_CONFIG = ObservabilityConfig(enabled=False)
 
@@ -119,6 +124,12 @@ def add_observability_args(
             "Only used when --otlp-endpoint is not set. Default is 9090."
         ),
     )
+    group.add_argument(
+        "--csv-output",
+        type=str,
+        default=None,
+        help="Path to a CSV file for event output.",
+    )
     return parser
 
 
@@ -141,6 +152,7 @@ def parse_args_to_observability_config(
         tracing_enabled=args.enable_tracing,
         otlp_endpoint=args.otlp_endpoint,
         prometheus_port=args.prometheus_port,
+        csv_output_path=args.csv_output,
     )
 
     if config.tracing_enabled and config.otlp_endpoint is None:
@@ -217,6 +229,14 @@ def init_observability(obs_config: ObservabilityConfig) -> EventBus:
         )
 
         bus.register_subscriber(MPServerTracingSubscriber())
+
+    if obs_config.csv_output_path is not None:
+        # First Party
+        from lmcache.v1.mp_observability.subscribers.csv_writer import (
+            CSVWriterSubscriber,
+        )
+
+        bus.register_subscriber(CSVWriterSubscriber(obs_config.csv_output_path))
 
     bus.start()
     return bus

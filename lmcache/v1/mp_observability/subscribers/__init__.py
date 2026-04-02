@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # First Party
+from lmcache.v1.mp_observability.subscribers.csv_writer import (
+    CSVWriterSubscriber,
+)
 from lmcache.v1.mp_observability.subscribers.logging import (
     L1LoggingSubscriber,
     MPServerLoggingSubscriber,
@@ -15,6 +18,7 @@ from lmcache.v1.mp_observability.subscribers.tracing import (
 )
 
 __all__ = [
+    "CSVWriterSubscriber",
     "L1LoggingSubscriber",
     "L1MetricsSubscriber",
     "MPServerLoggingSubscriber",

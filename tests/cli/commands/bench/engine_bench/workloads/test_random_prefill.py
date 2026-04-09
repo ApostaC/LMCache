@@ -137,10 +137,21 @@ class TestRandomPrefillPromptGeneration:
         assert w._prompts[1].startswith("Request 1: ")
         assert w._prompts[2].startswith("Request 2: ")
 
-    def test_prompt_fill_tokens(self) -> None:
+    def test_prompt_token_count(self) -> None:
         w, *_ = _make_workload(_make_config(request_length=100))
-        hi_count = w._prompts[0].count("hi")
-        assert hi_count == 90  # 100 - 10
+        # Body has request_length - 10 = 90 space-separated numbers
+        body = w._prompts[0].split(": ", 1)[1]
+        assert len(body.split()) == 90
+
+    def test_different_seeds_produce_different_prompts(self) -> None:
+        w1, *_ = _make_workload(_make_config(request_length=100), seed=1)
+        w2, *_ = _make_workload(_make_config(request_length=100), seed=2)
+        assert w1._prompts[0] != w2._prompts[0]
+
+    def test_same_seed_produces_same_prompts(self) -> None:
+        w1, *_ = _make_workload(_make_config(request_length=100), seed=7)
+        w2, *_ = _make_workload(_make_config(request_length=100), seed=7)
+        assert w1._prompts == w2._prompts
 
 
 # ---------------------------------------------------------------------------

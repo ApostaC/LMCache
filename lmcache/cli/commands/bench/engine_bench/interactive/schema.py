@@ -175,6 +175,14 @@ ALL_ITEMS: list[ConfigItem] = [
         default=100.0,
         phase=PHASE_GENERAL,
     ),
+    ConfigItem(
+        key="seed",
+        display_name="Random seed",
+        description="Random seed for reproducible workload generation.",
+        input_type="int",
+        default=42,
+        phase=PHASE_GENERAL,
+    ),
     # ── Phase 3: long-doc-permutator ─────────────────────────────────
     ConfigItem(
         key="ldp_num_contexts",

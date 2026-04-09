@@ -4,6 +4,7 @@
 # Standard
 from dataclasses import dataclass
 import asyncio
+import random
 
 # First Party
 from lmcache.cli.commands.bench.engine_bench.progress import ProgressMonitor
@@ -95,16 +96,24 @@ class RandomPrefillWorkload(BaseWorkload):
     # ------------------------------------------------------------------
 
     def _generate_prompts(self) -> list[str]:
-        """Generate synthetic prompts of approximately ``request_length`` tokens."""
+        """Generate synthetic prompts of approximately ``request_length`` tokens.
+
+        Uses a seeded RNG to produce random 1–3 digit numbers (each is a
+        single token) so that different seeds yield different token
+        sequences and avoid unintentional prefix-cache hits across runs.
+        """
+        rng = random.Random(self._seed)
         prompts: list[str] = []
         for i in range(self._config.num_requests):
+            num_tokens = max(self._config.request_length - 10, 1)
+            body = " ".join(str(rng.randint(1, 999)) for _ in range(num_tokens))
             prefix = f"Request {i}: "
-            body = " ".join(["hi"] * max(self._config.request_length - 10, 1))
             prompts.append(prefix + body)
         logger.debug(
-            "Generated %d prompts of ~%d tokens each",
+            "Generated %d prompts of ~%d tokens each (seed=%d)",
             len(prompts),
             self._config.request_length,
+            self._seed,
         )
         return prompts
 

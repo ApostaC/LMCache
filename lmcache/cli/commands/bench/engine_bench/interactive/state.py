@@ -22,7 +22,7 @@ from lmcache.cli.commands.bench.engine_bench.interactive.schema import (
 
 # Keys that exist on argparse.Namespace but are NOT part of the interactive
 # config item registry (operational flags, handled separately).
-_OUTPUT_KEYS = ("output_dir", "seed", "no_csv", "export_csv", "json", "quiet")
+_OUTPUT_KEYS = ("output_dir", "no_csv", "export_csv", "json", "quiet")
 
 # Keys used only during the interactive flow, never serialized or
 # passed to the orchestrator.
@@ -237,7 +237,6 @@ class InteractiveState:
 
         # Output settings (not in the interactive registry)
         ns.output_dir = self._values.get("output_dir", ".")
-        ns.seed = self._values.get("seed", 42)
         ns.no_csv = self._values.get("no_csv", False)
         ns.json = self._values.get("export_json", False)
         ns.quiet = self._values.get("quiet", False)

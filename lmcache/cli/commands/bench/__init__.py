@@ -327,7 +327,6 @@ class BenchCommand(BaseCommand):
             # Carry over output flags from CLI
             for attr in (
                 "output_dir",
-                "seed",
                 "no_csv",
                 "json",
                 "quiet",
@@ -384,6 +383,7 @@ class BenchCommand(BaseCommand):
         state.set("workload", config.workload)
         state.set("kv_cache_volume", config.kv_cache_volume_gb)
         state.set("tokens_per_gb_kvcache", config.tokens_per_gb_kvcache)
+        state.set("seed", config.seed)
 
         # Workload-specific args from namespace
         for item in state.get_workload_items():

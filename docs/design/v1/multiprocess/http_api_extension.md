@@ -33,12 +33,15 @@ Each file in this directory that matches the `*_api.py` naming
 convention is automatically discovered and registered. Existing
 modules:
 
-| Module | Endpoint | Method | Description |
+| Module | Endpoint(s) | Method | Description |
 |---|---|---|---|
 | `root_api.py` | `/` | GET | Basic liveness check |
 | `healthcheck_api.py` | `/api/healthcheck` | GET | K8s probe endpoint |
 | `cache_api.py` | `/api/clear-cache` | POST | Force-clear L1 cache |
 | `status_api.py` | `/api/status` | GET | Internal status report |
+| `conf_api.py` | `/conf` | GET | Dump merged server configuration (mp, storage_manager, observability) |
+| `version_api.py` | `/version`, `/lmc_version`, `/commit_id` | GET | Version descriptor; re-exports the router from `lmcache.v1.internal_api_server.vllm.version_api` |
+| `common_api.py` | (aggregator — see below) | — | Discovers every `*_api` sub-module under `lmcache/v1/internal_api_server/common/` and merges their routers into a single `APIRouter` (e.g. `env_api`, `loglevel_api`, `metrics_api`, `periodic_thread_api`, `thread_api`). Modules listed in `_MP_INCOMPATIBLE_MODULES` (currently `run_script_api`) are skipped because they depend on vLLM-specific `app.state` attributes. |
 
 ### `http_server.py`
 
@@ -70,10 +73,13 @@ HTTPAPIRegistry(app)
 register_all_apis()
   │
   ├─ pkgutil.iter_modules("http_apis/")
-  │    ├─ root_api       → has router? ✓ → include
+  │    ├─ root_api        → has router? ✓ → include
   │    ├─ healthcheck_api → has router? ✓ → include
   │    ├─ cache_api       → has router? ✓ → include
   │    ├─ status_api      → has router? ✓ → include
+  │    ├─ conf_api        → has router? ✓ → include
+  │    ├─ version_api     → has router? ✓ → include
+  │    ├─ common_api      → has router? ✓ → include  (aggregates internal_api_server/common/*_api)
   │    └─ my_new_api      → has router? ✓ → include
   │
   └─ app.include_router(collected_router)

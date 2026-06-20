@@ -21,11 +21,13 @@ from dataclasses import dataclass
 import time
 
 # Third Party
+import nvtx
 import zmq
 
 # First Party
 from lmcache.logging import init_logger
 from lmcache.native_storage_ops import Bitmap, PeriodicEventNotifier
+from lmcache.utils import _lmcache_nvtx_annotate
 from lmcache.v1.distributed.api import MemoryLayoutDesc, ObjectKey
 from lmcache.v1.distributed.internal_api import L1MemoryDesc, L2StoreResult
 from lmcache.v1.distributed.l2_adapters.base import L2AdapterInterface, L2TaskId
@@ -210,6 +212,7 @@ class P2PL2Adapter(L2AdapterInterface):
     # Lookup and Lock Interface
     # --------------------
 
+    @_lmcache_nvtx_annotate
     def submit_lookup_and_lock_task(
         self,
         keys: list[ObjectKey],
@@ -248,6 +251,7 @@ class P2PL2Adapter(L2AdapterInterface):
         )
         return task_id
 
+    @_lmcache_nvtx_annotate
     def query_lookup_and_lock_result(self, task_id: L2TaskId) -> Bitmap | None:
         task = self._lookup_tasks.get(task_id)
         if task is None:
@@ -281,6 +285,7 @@ class P2PL2Adapter(L2AdapterInterface):
         del self._lookup_tasks[task_id]
         return bitmap
 
+    @_lmcache_nvtx_annotate
     def submit_unlock(self, keys: list[ObjectKey]) -> None:
         if not keys:
             return
@@ -296,6 +301,7 @@ class P2PL2Adapter(L2AdapterInterface):
     # Load Interface
     # --------------------
 
+    @_lmcache_nvtx_annotate
     def submit_load_task(
         self,
         keys: list[ObjectKey],
@@ -305,6 +311,7 @@ class P2PL2Adapter(L2AdapterInterface):
         self._next_task_id += 1
 
         remote_addresses: list[TransferChannelAddress] = []
+        rng = nvtx.start_range("parse keys", color="blue", domain="lmcache")
         for key in keys:
             addr = self._remote_addresses.get(key)
             if addr is None or not addr.is_valid():
@@ -318,6 +325,7 @@ class P2PL2Adapter(L2AdapterInterface):
                 )
                 return task_id
             remote_addresses.append(addr)
+        nvtx.end_range(rng)
 
         local_addresses = self._tc_context.get_transfer_channel_address(
             [(obj.shm_offset, obj.shm_byte_length) for obj in objects]
@@ -334,6 +342,7 @@ class P2PL2Adapter(L2AdapterInterface):
         )
         return task_id
 
+    @_lmcache_nvtx_annotate
     def query_load_result(self, task_id: L2TaskId) -> Bitmap | None:
         task = self._load_tasks.get(task_id)
         if task is None:

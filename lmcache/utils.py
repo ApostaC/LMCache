@@ -17,7 +17,7 @@ import warnings
 
 try:
     # Third Party
-    from nvtx import annotate  # type: ignore
+    from nvtx import annotate, end_range, start_range  # type: ignore
 except ImportError:
 
     def annotate(*args, **kwargs):
@@ -27,6 +27,13 @@ except ImportError:
             return func
 
         return decorator
+
+    def start_range(*args, **kwargs):
+        """No-op range start when nvtx is not available."""
+        return None
+
+    def end_range(range_id):
+        """No-op range end when nvtx is not available."""
 
 
 # Third Party
@@ -678,6 +685,35 @@ def _lmcache_nvtx_annotate(func, domain="lmcache"):
         color=_get_color_for_nvtx(func.__qualname__),
         domain=domain,
     )(func)
+
+
+def _lmcache_nvtx_range_start(message, domain="lmcache"):
+    """Start an nvtx range that can be ended from a different function.
+
+    Args:
+        message: Range label shown in the profiler.
+        domain: nvtx domain to group the range under.
+
+    Returns:
+        An opaque range handle to pass to ``_lmcache_nvtx_range_end`` (``None``
+        when nvtx is unavailable).
+    """
+    return start_range(
+        message=message,
+        color=_get_color_for_nvtx(message),
+        domain=domain,
+    )
+
+
+def _lmcache_nvtx_range_end(range_handle):
+    """End an nvtx range previously started by ``_lmcache_nvtx_range_start``.
+
+    Args:
+        range_handle: The handle returned by ``_lmcache_nvtx_range_start``; a
+            ``None`` handle is ignored.
+    """
+    if range_handle is not None:
+        end_range(range_handle)
 
 
 ##### Observability Threading related #####

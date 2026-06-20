@@ -20,9 +20,13 @@ import enum
 import select
 import threading
 
+# Third Party
+import nvtx
+
 # First Party
 from lmcache.logging import init_logger
 from lmcache.native_storage_ops import Bitmap
+from lmcache.utils import _lmcache_nvtx_annotate
 from lmcache.v1.distributed.api import MemoryLayoutDesc, ObjectKey, TrimPolicy
 from lmcache.v1.distributed.error import L1Error
 from lmcache.v1.distributed.l1_manager import L1Manager
@@ -591,6 +595,7 @@ class PrefetchController(StorageControllerInterface):
             poller.register(efd, select.POLLIN)
 
         while not self._stop_flag.is_set():
+            rng = nvtx.start_range("prefetch loop", domain="lmcache", color="blue")
             # First, apply runtime add/remove of the L2 adapters.
             self._apply_pending_adapter_ops(poller)
 
@@ -645,7 +650,9 @@ class PrefetchController(StorageControllerInterface):
             # Finalize any draining adapter no longer have any in-flight
             # requests.
             self._finalize_drained_adapters(poller)
+            nvtx.end_range(rng)
 
+    @_lmcache_nvtx_annotate
     def _apply_pending_adapter_ops(self, poller: "select.poll") -> None:
         """Apply queued add/remove ops on the prefetch loop thread."""
         with self._adapter_ops_lock:
@@ -707,6 +714,7 @@ class PrefetchController(StorageControllerInterface):
             logger.info("PrefetchController detached adapter %d", adapter_id)
             done.set()
 
+    @_lmcache_nvtx_annotate
     def _drain_submission_queue(self) -> None:
         """Move items from the thread-safe submission queue to the
         pending queue."""
@@ -716,6 +724,7 @@ class PrefetchController(StorageControllerInterface):
         self._pending_queue.extend(items)
         self._status_pending_count += len(items)
 
+    @_lmcache_nvtx_annotate
     def _start_pending_requests(self) -> None:
         """Start pending requests up to the max in-flight limit."""
         while (
@@ -785,6 +794,7 @@ class PrefetchController(StorageControllerInterface):
     # =========================================================================
     # Load phase
     # =========================================================================
+    @_lmcache_nvtx_annotate
     def _transition_to_load_phase(self, request: InFlightPrefetchRequest) -> None:
         """Compute load plan, reserve L1 buffers, and submit load tasks."""
         request.phase = PrefetchPhase.PLAN_AND_LOAD
@@ -979,6 +989,7 @@ class PrefetchController(StorageControllerInterface):
         with self._lookup_results_lock:
             self._completed_lookups[request_id] = prefix_hit_count
 
+    @_lmcache_nvtx_annotate
     def _advance_request(
         self,
         request: InFlightPrefetchRequest,
@@ -999,6 +1010,7 @@ class PrefetchController(StorageControllerInterface):
             if request.all_loads_done():
                 self._finalize_load(request)
 
+    @_lmcache_nvtx_annotate
     def _poll_lookup_results(
         self,
         request: InFlightPrefetchRequest,
@@ -1017,6 +1029,7 @@ class PrefetchController(StorageControllerInterface):
             request.lookup_results[adapter_idx] = result
             del request.pending_lookup_tasks[adapter_idx]
 
+    @_lmcache_nvtx_annotate
     def _poll_load_results(
         self,
         request: InFlightPrefetchRequest,

@@ -33,8 +33,11 @@ from typing import Any
 from opentelemetry import metrics
 
 # First Party
+from lmcache.logging import init_logger
 from lmcache.v1.mp_observability.event import Event, EventType
 from lmcache.v1.mp_observability.event_bus import EventCallback, EventSubscriber
+
+logger = init_logger(__name__)
 
 
 class L2ThroughputSubscriber(EventSubscriber):
@@ -111,6 +114,7 @@ class L2ThroughputSubscriber(EventSubscriber):
             self._pending_load[key] = (event.timestamp, total_bytes)
 
     def _on_load_completed(self, event: Event) -> None:
+        logger.warning("L2_LOAD_TASK_COMPLETED event: %s", event)
         key = self._load_key(event)
         if key is None:
             return
@@ -188,4 +192,10 @@ class L2ThroughputSubscriber(EventSubscriber):
         if l2_name is not None:
             attrs["l2_name"] = str(l2_name)
 
+        logger.warning(
+            "Throughput sample: %.2f GBytes, %.2f msec, %.2f GB/s",
+            effective_bytes / 1e9,
+            dt * 1000,
+            effective_bytes / dt / 1e9,
+        )
         hist.record(effective_bytes / dt / 1e9, attributes=attrs)

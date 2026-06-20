@@ -12,6 +12,7 @@ import time
 # First Party
 from lmcache.logging import init_logger
 from lmcache.native_storage_ops import Bitmap, PeriodicEventNotifier
+from lmcache.utils import _lmcache_nvtx_annotate
 from lmcache.v1.distributed.api import (
     MemoryLayoutDesc,
     ObjectKey,
@@ -392,6 +393,7 @@ class StorageManager:
         )
 
     @enable_tracing()
+    @_lmcache_nvtx_annotate
     def submit_prefetch_task(
         self,
         keys: list[ObjectKey],
@@ -607,6 +609,7 @@ class StorageManager:
         # L2 lookup done: total prefix hits are L1 plus the L2 continuation.
         return l1_hits + l2_r
 
+    @_lmcache_nvtx_annotate
     def query_prefetch_status(
         self,
         handle: PrefetchHandle,

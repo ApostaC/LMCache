@@ -14,6 +14,11 @@ import zmq
 
 # First Party
 from lmcache.logging import init_logger
+from lmcache.utils import (
+    _lmcache_nvtx_annotate,
+    _lmcache_nvtx_range_end,
+    _lmcache_nvtx_range_start,
+)
 from lmcache.v1.distributed.internal_api import L1MemoryDesc
 from lmcache.v1.distributed.transfer_channel.abstract import (
     TransferChannelClient,
@@ -113,8 +118,11 @@ class NixlTransferChannelClient(TransferChannelClient):
         self._task_counter = 0
         # task_id -> (xfer_handle, remote_addresses)
         self._tasks: dict[int, tuple] = {}
+        # task_id -> nvtx range handle spanning submit_read .. read completion.
+        self._nvtx_ranges: dict[int, object] = {}
         self._lock = threading.Lock()
 
+    @_lmcache_nvtx_annotate
     def submit_read(
         self,
         local_addresses: list[TransferChannelAddress],
@@ -139,6 +147,7 @@ class NixlTransferChannelClient(TransferChannelClient):
         remote_idx = self._ctx.addresses_to_indices(remote_addresses)
 
         agent = self._ctx.agent
+        rng = _lmcache_nvtx_range_start("make_prepped_xfer")
         handle = agent.make_prepped_xfer(
             "READ",
             self._ctx.local_handle,
@@ -146,12 +155,17 @@ class NixlTransferChannelClient(TransferChannelClient):
             self._remote_handle,
             remote_idx,
         )
+        _lmcache_nvtx_range_end(rng)
+        rng = _lmcache_nvtx_range_start("nixl transfer")
         agent.transfer(handle)
+        _lmcache_nvtx_range_end(rng)
+        nvtx_range = _lmcache_nvtx_range_start("nixl_p2p_read")
 
         with self._lock:
             task_id = self._task_counter
             self._task_counter += 1
             self._tasks[task_id] = (handle, list(remote_addresses))
+            self._nvtx_ranges[task_id] = nvtx_range
         return task_id
 
     def query_read_status(self, task_id: int) -> TransferChannelReadResult:
@@ -174,10 +188,13 @@ class NixlTransferChannelClient(TransferChannelClient):
         if status == "PROC":
             return TransferChannelReadResult(finished=False, succeeded_mask=[])
 
-        # Terminal state (DONE or ERR): release the handle and report.
+        # Terminal state (DONE or ERR): release the handle, end the nvtx range
+        # (started at submit_read), and report.
         with self._lock:
             self._tasks.pop(task_id, None)
+            nvtx_range = self._nvtx_ranges.pop(task_id, None)
         self._ctx.agent.release_xfer_handle(handle)
+        _lmcache_nvtx_range_end(nvtx_range)
 
         if status == "DONE":
             return TransferChannelReadResult(
@@ -199,12 +216,16 @@ class NixlTransferChannelClient(TransferChannelClient):
         """
         with self._lock:
             tasks = list(self._tasks.values())
+            nvtx_ranges = list(self._nvtx_ranges.values())
             self._tasks.clear()
+            self._nvtx_ranges.clear()
         for handle, _ in tasks:
             try:
                 self._ctx.agent.release_xfer_handle(handle)
             except Exception:  # noqa: BLE001 - best-effort cleanup
                 pass
+        for nvtx_range in nvtx_ranges:
+            _lmcache_nvtx_range_end(nvtx_range)
         if self._remote_handle is not None:
             try:
                 self._ctx.agent.release_dlist_handle(self._remote_handle)
@@ -368,6 +389,7 @@ class NixlTransferChannelContext(TransferChannelContext):
     ############################################################
     # Address translation
     ############################################################
+    @_lmcache_nvtx_annotate
     def get_transfer_channel_address(
         self,
         lmcache_addresses: list[tuple[int, int]],
@@ -395,6 +417,7 @@ class NixlTransferChannelContext(TransferChannelContext):
             out.append(TransferChannelAddress(offset=offset, size=obj_size))
         return out
 
+    @_lmcache_nvtx_annotate
     def addresses_to_indices(
         self, addresses: list[TransferChannelAddress]
     ) -> list[int]:

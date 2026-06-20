@@ -12,6 +12,7 @@ import httpx
 
 # First Party
 from lmcache.logging import init_logger
+from lmcache.utils import _lmcache_nvtx_annotate
 from lmcache.v1.distributed.api import (
     MemoryLayoutDesc,
     ObjectKey,
@@ -219,6 +220,7 @@ class P2PController:
     # RPC Handlers
     # -----------------------------------------------------------------
 
+    @_lmcache_nvtx_annotate
     def p2p_lookup_and_lock(
         self,
         keys: list[ObjectKey],
@@ -259,6 +261,7 @@ class P2PController:
         )
         return task_id
 
+    @_lmcache_nvtx_annotate
     def p2p_query_lookup_results(
         self,
         task_id: int,

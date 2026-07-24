@@ -289,9 +289,9 @@ if cmp -s "$OUT_A" "$OUT_B"; then
 else
     echo "FAILED: outputs differ between the cold run and the LMCache-served run."
     echo "--- vLLM run (first 400 chars) ---"
-    head -c 400 "$OUT_A"; echo
+    head -c 10000 "$OUT_A"; echo
     echo "--- LMCache retrieve run (first 400 chars) ---"
-    head -c 400 "$OUT_B"; echo
+    head -c 10000 "$OUT_B"; echo
     failed=1
 fi
 
